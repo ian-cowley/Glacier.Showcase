@@ -24,6 +24,8 @@ dotnet run --project Glacier.Showcase
 ```
 Then navigate to **`http://localhost:5000/mission-control`** in your browser.
 
+> 📖 **Deep Technical Architecture & Blueprints**: Explore [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for comprehensive sequence diagrams, hardware routing maps, and memory virtualization deep dives.
+
 ---
 
 ## 🎯 The Five Mission Control Visual Cockpits
