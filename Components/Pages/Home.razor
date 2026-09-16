@@ -1,0 +1,954 @@
+@page "/"
+@using Glacier.Showcase.Services
+@using System.IO
+@using System.Text.Json
+@using Glacier.AgentDevKit.Adk
+@inject AgentService AgentService
+@inject AgentOrchestratorState State
+@inject IJSRuntime JS
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Glacier Suite - Multi-Agent Investment Advisor</PageTitle>
+
+<div class="dashboard-container">
+    <!-- Left: Chat Panel -->
+    <div class="chat-panel">
+        <div class="panel-header">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+                <h2 class="panel-title">
+                    <span class="gradient-text">Glacier Suite</span>
+                </h2>
+                <div class="history-selector">
+                    <select @onchange="OnRunSelected" class="history-dropdown">
+                        <option value="">-- Active Sandbox Session --</option>
+                        @foreach (var file in RunFiles)
+                        {
+                            <option value="@file">@file</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <!-- Brand Banner -->
+            <div class="brand-banner">
+                <div style="margin-bottom: 0.75rem;">
+                    <a href="mission-control" style="display: inline-flex; align-items: center; gap: 0.5rem; background: linear-gradient(135deg, #00ffcc, #0099ff); color: #000; font-weight: 800; font-size: 0.85rem; padding: 0.4rem 1rem; border-radius: 6px; text-decoration: none; box-shadow: 0 0 16px rgba(0, 255, 204, 0.4);">
+                        <span>⚡ LAUNCH MISSION CONTROL</span>
+                        <span style="font-size: 0.7rem; background: rgba(0,0,0,0.2); padding: 0.1rem 0.4rem; border-radius: 4px;">LIVE COCKPIT</span>
+                    </a>
+                </div>
+                <div class="brand-chips">
+                    <a href="https://www.nuget.org/packages/Glacier.Inference" target="_blank" class="brand-chip polaris">Glacier.Inference</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Tune" target="_blank" class="brand-chip tensor">Glacier.Tune</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Serve" target="_blank" class="brand-chip ml">Glacier.Serve</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Rag" target="_blank" class="brand-chip graph">Glacier.Rag</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Polaris" target="_blank" class="brand-chip polaris">Glacier.Polaris</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Vector" target="_blank" class="brand-chip vector">Glacier.Vector</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Plot" target="_blank" class="brand-chip plot">Glacier.Plot</a>
+                    <a href="https://www.nuget.org/packages/Glacier.StatsViz" target="_blank" class="brand-chip statsviz">Glacier.StatsViz</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Graph" target="_blank" class="brand-chip graph">Glacier.Graph</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-history" id="chatHistory">
+            @foreach (var msg in State.ChatMessages)
+            {
+                <div class="chat-message @(msg.Sender == "Client" ? "user-msg" : "agent-msg") @(msg.Vibe == "Error" ? "error-msg" : "")">
+                    <div class="sender-badge">@msg.Sender</div>
+                    <div class="message-content">@((MarkupString)FormatMessage(msg.Content))</div>
+                </div>
+            }
+
+            @if (IsThinking)
+            {
+                <div class="chat-message agent-msg">
+                    <div class="sender-badge">@State.ActiveAgentName</div>
+                    <div class="typing-indicator">
+                        <span></span><span></span><span></span>
+                    </div>
+                    @if (State.RegisteredAgents.TryGetValue(State.ActiveAgentName, out var activeAgent) && !string.IsNullOrEmpty(activeAgent.Status))
+                    {
+                        <div class="status-indicator">@activeAgent.Status...</div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Example prompt chips -->
+        <div class="prompt-chips">
+            @foreach (var chip in ExamplePrompts)
+            {
+                <button class="prompt-chip" @onclick="() => UseExamplePrompt(chip)" disabled="@IsThinking">@chip</button>
+            }
+        </div>
+        <div class="chat-input-area">
+            <textarea @bind="Prompt" @bind:event="oninput" @onkeyup="HandleKeyUp" placeholder="e.g. Find cozy cottage vibe under $150 in Westminster" class="chat-input" disabled="@IsThinking" rows="1" id="chatTextarea"></textarea>
+            <button @onclick="SendPrompt" class="send-btn" disabled="@(string.IsNullOrWhiteSpace(Prompt) || IsThinking)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M2.01 21L23 12L2.01 3L2 10L17 12L2 14L2.01 21Z" fill="currentColor"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Right: Visualizer Workspace -->
+    <div class="visualizer-panel">
+        <div class="tab-header">
+            <button class="tab-btn @(ActiveTab == "orchestrator" ? "active" : "")" @onclick='() => SetActiveTab("orchestrator")'>Orchestrator Map</button>
+            <button class="tab-btn @(ActiveTab == "candidates" ? "active" : "")" @onclick='() => SetActiveTab("candidates")'>
+                Candidates (@State.FilteredProperties.Count)
+            </button>
+            <button class="tab-btn @(ActiveTab == "matches" ? "active" : "")" @onclick='() => SetActiveTab("matches")'>
+                Vector Matches (@State.FinalMatches.Count)
+            </button>
+            <button class="tab-btn @(ActiveTab == "transit" ? "active" : "")" @onclick='() => SetActiveTab("transit")'>Location Audit</button>
+            <button class="tab-btn @(ActiveTab == "underwriting" ? "active" : "")" @onclick='() => SetActiveTab("underwriting")'>
+                Underwriting (@State.UnderwrittenProperties.Count)
+            </button>
+            <button class="tab-btn @(ActiveTab == "prospectus" ? "active" : "")" @onclick='() => SetActiveTab("prospectus")'>Prospectus</button>
+            
+            <div class="phase-pill @State.ExecutionPhase.ToLower()">
+                Phase: @State.ExecutionPhase
+            </div>
+
+            <button class="auto-advance-toggle @(AutoAdvanceTabs ? "on" : "off")" @onclick="() => AutoAdvanceTabs = !AutoAdvanceTabs" title="@(AutoAdvanceTabs ? "Auto-advance tabs ON — click to watch animation" : "Auto-advance tabs OFF — click to enable")">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;">
+                    @if (AutoAdvanceTabs)
+                    {
+                        <path d="M5 3l14 9-14 9V3z" fill="currentColor"/>
+                    }
+                    else
+                    {
+                        <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+                        <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+                    }
+                </svg>
+                @(AutoAdvanceTabs ? "Auto" : "Manual")
+            </button>
+        </div>
+
+        <div class="tab-content">
+            @if (ActiveTab == "orchestrator")
+            {
+                <div class="glass-card" style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative;">
+                    <svg viewBox="0 0 850 560" width="100%" height="100%" style="max-height: 560px;">
+                        <defs>
+                            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                                <feGaussianBlur stdDeviation="6" result="blur" />
+                                <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
+                            <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+                                <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.3"/>
+                            </filter>
+                            <filter id="glow-emerald" x="-20%" y="-20%" width="140%" height="140%">
+                                <feGaussianBlur stdDeviation="5" result="blur" />
+                                <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
+                            <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#38bdf8" />
+                                <stop offset="100%" stop-color="#0284c7" />
+                            </linearGradient>
+                            <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#818cf8" stop-opacity="0.8"/>
+                                <stop offset="100%" stop-color="#4f46e5" stop-opacity="0.8"/>
+                            </linearGradient>
+                            <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#34d399" stop-opacity="0.8"/>
+                                <stop offset="100%" stop-color="#059669" stop-opacity="0.9"/>
+                            </linearGradient>
+                            <marker id="arrow" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+                            </marker>
+                        </defs>
+
+                        <!-- Connections -->
+                        <!-- Client (50, 280) to Coordinator (220, 280) -->
+                        <line x1="50" y1="280" x2="220" y2="280" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+
+                        <!-- Coordinator to Polaris Analyst (phase 1 — sequential) -->
+                        <path d="M 220 280 Q 350 160 480 80" fill="none" stroke="@GetConnectionColor("Polaris Analyst")" stroke-width="2" stroke-dasharray="@(GetConnectionDashArray("Polaris Analyst"))" class="@(IsConnectionActive("Polaris Analyst") ? "svg-pulse-path" : "")" marker-end="url(#arrow)" />
+
+                        <!-- Polaris → Vector Specialist (sequential handoff) -->
+                        <path d="M 560 80 Q 560 140 480 200" fill="none" stroke="@GetConnectionColor("Vector Specialist")" stroke-width="1.5" stroke-dasharray="@(GetConnectionDashArray("Vector Specialist"))" class="@(IsConnectionActive("Vector Specialist") ? "svg-pulse-path" : "")" marker-end="url(#arrow)" />
+
+                        <!-- Coordinator to Risk Auditor (parallel with Vector) -->
+                        <path d="M 220 280 Q 350 300 480 310" fill="none" stroke="@GetConnectionColor("Risk Auditor")" stroke-width="2" stroke-dasharray="@(GetConnectionDashArray("Risk Auditor"))" class="@(IsConnectionActive("Risk Auditor") ? "svg-pulse-path" : "")" marker-end="url(#arrow)" />
+
+                        <!-- Parallel agents converge to Financial Underwriter (680, 200) -->
+                        <path d="M 560 80 Q 630 140 680 200" fill="none" stroke="@GetConnectionColor("Financial Underwriter")" stroke-width="1.5" stroke-dasharray="@(GetConnectionDashArray("Financial Underwriter"))" class="@(IsConnectionActive("Financial Underwriter") ? "svg-pulse-path" : "")" />
+                        <path d="M 560 200 Q 620 200 680 200" fill="none" stroke="@GetConnectionColor("Financial Underwriter")" stroke-width="1.5" />
+                        <path d="M 560 310 Q 630 260 680 200" fill="none" stroke="@GetConnectionColor("Financial Underwriter")" stroke-width="1.5" marker-end="url(#arrow)" />
+
+                        <!-- Financial Underwriter to Prospectus Designer -->
+                        <path d="M 680 240 Q 680 340 680 420" fill="none" stroke="@GetConnectionColor("Prospectus Designer")" stroke-width="2" stroke-dasharray="@(GetConnectionDashArray("Prospectus Designer"))" class="@(IsConnectionActive("Prospectus Designer") ? "svg-pulse-path" : "")" marker-end="url(#arrow)" />
+
+                        <!-- Node: Client -->
+                        <g class="svg-node" transform="translate(50, 280)">
+                            <circle r="30" fill="url(#accentGrad)" filter="url(#shadow)" />
+                            <text text-anchor="middle" dy=".3em" fill="white" font-size="10" font-weight="bold">CLIENT</text>
+                        </g>
+
+                        <!-- Node: Coordinator -->
+                        <g class="svg-node @(IsNodeActive("Acquisition Manager") ? "active-node" : "")" transform="translate(220, 280)" @onclick='() => InspectAgent("Acquisition Manager")'>
+                            <rect x="-80" y="-35" width="160" height="70" rx="8" fill="@GetNodeFill("Acquisition Manager")" stroke="@GetNodeStroke("Acquisition Manager")" stroke-width="2" filter="@(IsNodeActive("Acquisition Manager") ? "url(#glow)" : "url(#shadow)")" />
+                            <text text-anchor="middle" y="-5" fill="white" font-size="11" font-weight="bold">Acquisition Manager</text>
+                            <text text-anchor="middle" y="15" fill="#94a3b8" font-size="9">Coordinator Persona</text>
+                            <text text-anchor="middle" y="25" fill="@GetStatusColor("Acquisition Manager")" font-size="8" font-weight="bold">@GetNodeStatusText("Acquisition Manager")</text>
+                        </g>
+
+                        <!-- Node: Polaris Analyst -->
+                        <g class="svg-node @(IsNodeActive("Polaris Analyst") ? "active-node" : "")" transform="translate(480, 80)" @onclick='() => InspectAgent("Polaris Analyst")'>
+                            <rect x="-80" y="-30" width="160" height="60" rx="8" fill="@GetNodeFill("Polaris Analyst")" stroke="@GetNodeStroke("Polaris Analyst")" stroke-width="2" filter="@(IsNodeActive("Polaris Analyst") ? "url(#glow)" : "url(#shadow)")" />
+                            <text text-anchor="middle" y="-5" fill="white" font-size="11" font-weight="bold">Polaris Analyst</text>
+                            <text text-anchor="middle" y="10" fill="#94a3b8" font-size="9">Polaris Engine</text>
+                            <text text-anchor="middle" y="20" fill="@GetStatusColor("Polaris Analyst")" font-size="8" font-weight="bold">@GetNodeStatusText("Polaris Analyst")</text>
+                        </g>
+
+                        <!-- Node: Vector Specialist -->
+                        <g class="svg-node @(IsNodeActive("Vector Specialist") ? "active-node" : "")" transform="translate(480, 200)" @onclick='() => InspectAgent("Vector Specialist")'>
+                            <rect x="-80" y="-30" width="160" height="60" rx="8" fill="@GetNodeFill("Vector Specialist")" stroke="@GetNodeStroke("Vector Specialist")" stroke-width="2" filter="@(IsNodeActive("Vector Specialist") ? "url(#glow)" : "url(#shadow)")" />
+                            <text text-anchor="middle" y="-5" fill="white" font-size="11" font-weight="bold">Vector Specialist</text>
+                            <text text-anchor="middle" y="10" fill="#94a3b8" font-size="9">Vector Index</text>
+                            <text text-anchor="middle" y="20" fill="@GetStatusColor("Vector Specialist")" font-size="8" font-weight="bold">@GetNodeStatusText("Vector Specialist")</text>
+                        </g>
+
+                        <!-- Node: Risk Auditor -->
+                        <g class="svg-node @(IsNodeActive("Risk Auditor") ? "active-node" : "")" transform="translate(480, 310)" @onclick='() => InspectAgent("Risk Auditor")'>
+                            <rect x="-80" y="-30" width="160" height="60" rx="8" fill="@GetNodeFill("Risk Auditor")" stroke="@GetNodeStroke("Risk Auditor")" stroke-width="2" filter="@(IsNodeActive("Risk Auditor") ? "url(#glow)" : "url(#shadow)")" />
+                            <text text-anchor="middle" y="-5" fill="white" font-size="11" font-weight="bold">Risk Auditor</text>
+                            <text text-anchor="middle" y="10" fill="#94a3b8" font-size="9">DocTree + CSR Graph</text>
+                            <text text-anchor="middle" y="20" fill="@GetStatusColor("Risk Auditor")" font-size="8" font-weight="bold">@GetNodeStatusText("Risk Auditor")</text>
+                        </g>
+
+                        <!-- Node: Financial Underwriter (collation point) -->
+                        <g class="svg-node @(IsNodeActive("Financial Underwriter") ? "active-node" : "")" transform="translate(680, 200)" @onclick='() => InspectAgent("Financial Underwriter")'>
+                            <rect x="-85" y="-32" width="170" height="65" rx="8" fill="@GetNodeFill("Financial Underwriter")" stroke="@GetNodeStroke("Financial Underwriter")" stroke-width="2" filter="@(IsNodeActive("Financial Underwriter") ? "url(#glow-emerald)" : "url(#shadow)")" />
+                            <text text-anchor="middle" y="-8" fill="white" font-size="11" font-weight="bold">Financial Underwriter</text>
+                            <text text-anchor="middle" y="8" fill="#94a3b8" font-size="9">Yield + Cash-on-Cash</text>
+                            <text text-anchor="middle" y="20" fill="@GetStatusColor("Financial Underwriter")" font-size="8" font-weight="bold">@GetNodeStatusText("Financial Underwriter")</text>
+                        </g>
+
+                        <!-- Node: Prospectus Designer -->
+                        <g class="svg-node @(IsNodeActive("Prospectus Designer") ? "active-node" : "")" transform="translate(680, 450)" @onclick='() => InspectAgent("Prospectus Designer")'>
+                            <rect x="-85" y="-30" width="170" height="62" rx="8" fill="@GetNodeFill("Prospectus Designer")" stroke="@GetNodeStroke("Prospectus Designer")" stroke-width="2" filter="@(IsNodeActive("Prospectus Designer") ? "url(#glow)" : "url(#shadow)")" />
+                            <text text-anchor="middle" y="-5" fill="white" font-size="11" font-weight="bold">Prospectus Designer</text>
+                            <text text-anchor="middle" y="10" fill="#94a3b8" font-size="9">TinyPdf Writer</text>
+                            <text text-anchor="middle" y="22" fill="@GetStatusColor("Prospectus Designer")" font-size="8" font-weight="bold">@GetNodeStatusText("Prospectus Designer")</text>
+                        </g>
+                    </svg>
+                    <div style="position: absolute; bottom: 10px; right: 10px; font-size: 0.75rem; color: var(--text-muted);">
+                        💡 Click on any agent node to inspect its internal logic, prompt, and tool call logs.
+                    </div>
+                </div>
+            }
+            else if (ActiveTab == "candidates")
+            {
+                <div class="glass-card table-container">
+                    @if (State.FilteredProperties.Any())
+                    {
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Borough</th>
+                                    <th>Price</th>
+                                    <th>Reviews</th>
+                                    <th>Score</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var p in State.FilteredProperties.Take(25))
+                                {
+                                    <tr>
+                                        <td>@p.Name</td>
+                                        <td>@p.Neighbourhood</td>
+                                        <td>$@p.Price</td>
+                                        <td>@p.ReviewsCount</td>
+                                        <td>★ @p.ReviewScore.ToString("F1")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <p style="color: var(--text-muted); text-align: center; padding: 2rem;">No candidates filtered yet. Run a search query first.</p>
+                    }
+                </div>
+            }
+            else if (ActiveTab == "matches")
+            {
+                <div class="results-grid">
+                    @if (State.FinalMatches.Any())
+                    {
+                        @foreach (var match in State.FinalMatches)
+                        {
+                            <div class="glass-card" style="cursor: pointer;" @onclick="() => SelectProperty(match)">
+                                <h3 style="margin-top: 0; font-size: 1.1rem; line-height: 1.3;">@match.Name</h3>
+                                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">@match.Neighbourhood</p>
+                                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                                    <span class="stat-pill price">$@match.Price/nt</span>
+                                    <span class="stat-pill rating">★ @match.ReviewScore.ToString("F1")</span>
+                                    <span class="stat-pill vibe">Vibe: @((match.VibeMatchScore * 100).ToString("F0"))%</span>
+                                </div>
+                                <p style="font-size: 0.85rem; line-height: 1.4; color: #cbd5e1;">
+                                    @(match.Description.Length > 120 ? match.Description.Substring(0, 120) + "..." : match.Description)
+                                </p>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="glass-card" style="grid-column: 1 / -1; text-align: center; padding: 3rem; color: var(--text-muted);">
+                            Vector vibe embeddings search has not run yet.
+                        </div>
+                    }
+                </div>
+            }
+            else if (ActiveTab == "transit")
+            {
+                <div class="audit-grid">
+                    <div class="glass-card">
+                        <h3 style="margin-top: 0; color: var(--primary);">Neighborhood Risk Profile</h3>
+                        @if (State.ActiveNeighborhoodProfile != null)
+                        {
+                            <div class="audit-metric">
+                                <span>Borough Name</span>
+                                <span>@State.ActiveNeighborhoodProfile.Name</span>
+                            </div>
+                            <div class="audit-metric">
+                                <span>Safety Score</span>
+                                <span>@State.ActiveNeighborhoodProfile.SafetyScore/10</span>
+                            </div>
+                            <div class="audit-metric">
+                                <span>Crime Index</span>
+                                <span>@State.ActiveNeighborhoodProfile.CrimeRate</span>
+                            </div>
+                            <div class="audit-metric">
+                                <span>Atmosphere Vibe</span>
+                                <span>@State.ActiveNeighborhoodProfile.Vibe</span>
+                            </div>
+                            <div style="margin-top: 1rem;">
+                                <span style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); text-transform: uppercase;">Attractions</span>
+                                <p style="font-size: 0.85rem; margin: 0.25rem 0 0 0; line-height: 1.4;">@State.ActiveNeighborhoodProfile.Attractions</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <p style="color: var(--text-muted);">No neighborhood data audited yet.</p>
+                        }
+                    </div>
+
+                    <div class="glass-card">
+                        <h3 style="margin-top: 0; color: var(--secondary);">Transit Connectivity (CSR Graph)</h3>
+                        @if (State.ActiveTransitRoute != null && State.ActiveTransitRoute.Path.Count > 0)
+                        {
+                            <div class="audit-metric" style="margin-bottom: 1rem;">
+                                <span>Hops to Central London</span>
+                                <span>@State.ActiveTransitRoute.Hops hops</span>
+                            </div>
+                            
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                @for (int i = 0; i < State.ActiveTransitRoute.Path.Count; i++)
+                                {
+                                    <div class="transit-step">
+                                        <span style="font-size: 0.8rem; font-weight: bold; color: var(--primary);">Step @(i+1)</span>
+                                        <span>@State.ActiveTransitRoute.Path[i]</span>
+                                    </div>
+                                    @if (i < State.ActiveTransitRoute.Path.Count - 1)
+                                    {
+                                        <div class="transit-arrow">↓</div>
+                                    }
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <p style="color: var(--text-muted);">No transit route calculated yet.</p>
+                        }
+                    </div>
+                </div>
+            }
+            else if (ActiveTab == "underwriting")
+            {
+                <div class="glass-card table-container">
+                    @if (State.UnderwrittenProperties.Any())
+                    {
+                        <h3 style="margin-top: 0; color: var(--primary);">Financial Underwriting — Yield Analysis</h3>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Property</th>
+                                    <th>Est. Value</th>
+                                    <th>Occupancy</th>
+                                    <th>Gross Revenue</th>
+                                    <th>Net Income</th>
+                                    <th>Cap Rate</th>
+                                    <th>Cash-on-Cash</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var uw in State.UnderwrittenProperties)
+                                {
+                                    <tr>
+                                        <td title="@uw.PropertyName">@(uw.PropertyName.Length > 35 ? uw.PropertyName.Substring(0, 35) + "..." : uw.PropertyName)</td>
+                                        <td>£@uw.EstimatedValue.ToString("N0")</td>
+                                        <td>@((uw.OccupancyRate * 100).ToString("F0"))%</td>
+                                        <td>£@uw.GrossAnnualRevenue.ToString("N0")/yr</td>
+                                        <td>£@uw.NetAnnualIncome.ToString("N0")/yr</td>
+                                        <td style="color: var(--success); font-weight: bold;">@((uw.RentalYield * 100).ToString("F1"))%</td>
+                                        <td style="color: @(uw.CashOnCashReturn >= 0 ? "var(--success)" : "var(--error)"); font-weight: bold;">@((uw.CashOnCashReturn * 100).ToString("F1"))%</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 1rem;">Assumptions: 75% LTV @@ 5.5% interest rate &middot; 30% cash invested (25% down + 5% fees) &middot; 35% operating expense ratio. <strong style="color: var(--warning);">⚠ Illustrative projections only &mdash; not financial advice.</strong></p>
+                    }
+                    else
+                    {
+                        <p style="color: var(--text-muted); text-align: center; padding: 2rem;">No underwriting data available yet. Run a search query first.</p>
+                    }
+                </div>
+            }
+            else if (ActiveTab == "prospectus")
+            {
+                <div class="glass-card prospectus-download-box">
+                    @if (!string.IsNullOrEmpty(State.ProspectusPdfPath))
+                    {
+                        <div style="font-size: 3rem;">📄</div>
+                        <h3 style="margin: 0;">Prospectus Compiled</h3>
+                        <p style="color: var(--text-muted); text-align: center; max-width: 400px;">
+                            The prospectus has been fully compiled combining Polaris listing metrics, Vector matches, CSR Graph transit route calculations, and Financial Underwriting projections.
+                        </p>
+                        <a href="@State.ProspectusPdfPath" target="_blank" class="btn-premium">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M12 16L17 11H14V4H10V11H7L12 16ZM5 18H19V20H5V18Z" fill="currentColor"/>
+                            </svg>
+                            Download PDF Prospectus
+                        </a>
+                    }
+                    else
+                    {
+                        <div style="font-size: 2.5rem; opacity: 0.4;">⏳</div>
+                        <h3>Awaiting Compilation</h3>
+                        <p style="color: var(--text-muted); text-align: center;">
+                            The Prospectus Designer agent will generate the PDF at the end of the orchestration pipeline.
+                        </p>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<!-- Slide-out Telemetry Inspector Overlay -->
+<div class="inspector-panel @(string.IsNullOrEmpty(SelectedAgentName) ? "" : "open")">
+    <div class="inspector-header">
+        <h3 class="inspector-title">
+            <span style="color: var(--primary);">@SelectedAgentName</span> - Inspector
+        </h3>
+        <button class="inspector-close-btn" @onclick="CloseInspector">&times;</button>
+    </div>
+    <div class="inspector-body">
+        @if (ActiveAgentInstance != null)
+        {
+            <div>
+                <div class="inspector-section-title">Agent Specification</div>
+                <div class="audit-metric">
+                    <span>Model Name</span>
+                    <span>@ActiveAgentInstance.Model</span>
+                </div>
+                <div class="audit-metric" style="margin-bottom: 0.5rem;">
+                    <span>Role / Task</span>
+                    <span>@ActiveAgentInstance.Description</span>
+                </div>
+            </div>
+
+            <div>
+                <div class="inspector-section-title">System Instructions</div>
+                <div class="instructions-block">@ActiveAgentInstance.Instruction</div>
+            </div>
+
+            <div>
+                <div class="inspector-section-title">Registered Tools (@ActiveAgentInstance.Tools.Count)</div>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    @foreach (var tool in ActiveAgentInstance.Tools)
+                    {
+                        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 0.75rem; border-radius: 0.35rem;">
+                            <span style="color: var(--warning); font-family: monospace; font-weight: bold;">@tool.Name</span>
+                            <p style="margin: 0.25rem 0 0 0; font-size: 0.8rem; color: var(--text-muted);">@tool.Description</p>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div>
+                <div class="inspector-section-title">Telemetry Run Logs</div>
+                <div style="display: flex; flex-direction: column; gap: 1rem;">
+                    @if (GetLogsForAgent(SelectedAgentName).Any())
+                    {
+                        @foreach (var log in GetLogsForAgent(SelectedAgentName))
+                        {
+                            <div class="log-step-card @GetLogCardClass(log.Action)">
+                                <div class="log-step-header">
+                                    <span>@log.Action</span>
+                                    <span>@log.Timestamp.ToString("HH:mm:ss.fff")</span>
+                                </div>
+                                <div class="log-step-desc">@log.Description</div>
+                                @if (!string.IsNullOrEmpty(log.RawContent))
+                                {
+                                    <pre class="log-step-raw">@log.RawContent</pre>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <p style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No logs recorded for this agent in the active run.</p>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Property Details Modal -->
+@if (SelectedProperty != null)
+{
+    <div class="modal-overlay" @onclick="() => SelectedProperty = null">
+        <div class="modal-content glass-card" @onclick:stopPropagation>
+            <button class="modal-close-btn" @onclick="() => SelectedProperty = null">&times;</button>
+            <h2 style="margin-top: 0; color: var(--primary);">@SelectedProperty.Name</h2>
+            <p style="color: var(--text-muted); margin-bottom: 1rem;">Borough: @SelectedProperty.Neighbourhood</p>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem;">
+                <span class="stat-pill price">$@SelectedProperty.Price/nt</span>
+                <span class="stat-pill rating">★ @SelectedProperty.ReviewScore.ToString("F1") (@SelectedProperty.ReviewsCount reviews)</span>
+                <span class="stat-pill vibe">Vibe Match: @((SelectedProperty.VibeMatchScore * 100).ToString("F0"))%</span>
+            </div>
+            
+            <h4 style="margin-bottom: 0.5rem; color: var(--secondary);">Description</h4>
+            <p style="font-size: 0.9rem; line-height: 1.5; color: #cbd5e1; margin-bottom: 1.5rem;">@SelectedProperty.Description</p>
+            
+            <h4 style="margin-bottom: 0.5rem; color: var(--secondary);">Investment Summary</h4>
+            <p style="font-size: 0.9rem; line-height: 1.5; color: #cbd5e1;">
+                This listing shows an optimized match score of @((SelectedProperty.VibeMatchScore * 100).ToString("F0"))% with your search parameters. 
+                At a price point of $@SelectedProperty.Price per night and rating rating of ★ @SelectedProperty.ReviewScore.ToString("F1"), it forms a strong inclusion in the investment portfolio.
+            </p>
+        </div>
+    </div>
+}
+
+@code {
+    private string Prompt { get; set; } = "";
+    private bool IsThinking { get; set; } = false;
+    private string ActiveTab { get; set; } = "orchestrator";
+    private PropertyMatch? SelectedProperty { get; set; }
+    
+    // Agent Inspector State
+    private string? SelectedAgentName { get; set; }
+    private TelemetryAgent? ActiveAgentInstance { get; set; }
+
+    // Historical Logs Lists
+    private List<string> RunFiles { get; set; } = new();
+
+    protected override void OnInitialized()
+    {
+        State.OnChange += OnStateChanged;
+        LoadHistoricalRuns();
+    }
+
+    private bool AutoAdvanceTabs = true;
+
+    private void OnStateChanged()
+    {
+        // Only auto-navigate if the user has the toggle enabled
+        if (AutoAdvanceTabs)
+        {
+            var phase = State.ExecutionPhase;
+            if (phase == "Filtering" && ActiveTab == "orchestrator")
+                ActiveTab = "candidates";
+            else if (phase == "Parallel Search" && ActiveTab == "candidates")
+                ActiveTab = "matches";
+            else if (phase == "Collating Results" || phase == "Underwriting Projections")
+                ActiveTab = "underwriting";
+            else if (phase == "Finished" && !string.IsNullOrEmpty(State.ProspectusPdfPath))
+                ActiveTab = "prospectus";
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static readonly string[] ExamplePrompts = new[]
+    {
+        "Cozy flat under $120 in Camden",
+        "Modern luxury apartment in Westminster under $200",
+        "Boutique quirky stay in Hackney"
+    };
+
+    private void UseExamplePrompt(string p) => Prompt = p;
+
+    private void SetActiveTab(string tab)
+    {
+        ActiveTab = tab;
+    }
+
+    private void InspectAgent(string name)
+    {
+        SelectedAgentName = name;
+        ActiveAgentInstance = name switch
+        {
+            "Acquisition Manager" => AgentService.AcquisitionManager,
+            "Polaris Analyst" => AgentService.PolarisAnalyst,
+            "Vector Specialist" => AgentService.VectorSpecialist,
+            "Risk Auditor" => AgentService.RiskAuditor,
+            "Prospectus Designer" => AgentService.ProspectusDesigner,
+            "Financial Underwriter" => AgentService.FinancialUnderwriter,
+            _ => null
+        };
+    }
+
+    private void CloseInspector()
+    {
+        SelectedAgentName = null;
+        ActiveAgentInstance = null;
+    }
+
+    private List<AgentLogEntry> GetLogsForAgent(string? agentName)
+    {
+        if (string.IsNullOrEmpty(agentName)) return new List<AgentLogEntry>();
+        return State.StepLogs.Where(l => l.AgentName == agentName).ToList();
+    }
+
+    private string GetLogCardClass(string action)
+    {
+        return action switch
+        {
+            "Tool Call" => "tool-call",
+            "Tool Return" => "tool-return",
+            "Model Output (Function Call)" => "model-output",
+            "Model Output (Response)" => "model-output",
+            _ => ""
+        };
+    }
+
+    private async Task SendPrompt()
+    {
+        if (string.IsNullOrWhiteSpace(Prompt)) return;
+
+        var userMsg = Prompt;
+        Prompt = "";
+        IsThinking = true;
+
+        // Force UI update
+        StateHasChanged();
+
+        try
+        {
+            // Execute multi-agent orchestration
+            await AgentService.RunAsync(userMsg);
+        }
+        catch (Exception ex)
+        {
+            State.AddChatMessage("System", $"An error occurred during run: {ex.Message}", "Error");
+        }
+        finally
+        {
+            IsThinking = false;
+            LoadHistoricalRuns(); // Refresh runs list
+            StateHasChanged();
+            
+            await Task.Delay(50); // Let UI render
+            await JS.InvokeVoidAsync("eval", "const el = document.getElementById('chatTextarea'); if(el) el.style.height = 'auto';");
+            await JS.InvokeVoidAsync("eval", "const el = document.getElementById('chatHistory'); if(el) el.scrollTop = el.scrollHeight;");
+        }
+    }
+
+    private async Task HandleKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SendPrompt();
+        }
+    }
+
+    private void SelectProperty(PropertyMatch prop)
+    {
+        SelectedProperty = prop;
+    }
+
+    private void LoadHistoricalRuns()
+    {
+        try
+        {
+            string runsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", "runs");
+            if (Directory.Exists(runsFolder))
+            {
+                RunFiles = Directory.GetFiles(runsFolder, "run_*.json")
+                                    .Select(Path.GetFileName)
+                                    .OrderByDescending(f => f)
+                                    .ToList()!;
+            }
+        }
+        catch { }
+    }
+
+    private void OnRunSelected(ChangeEventArgs e)
+    {
+        string? filename = e.Value?.ToString();
+        if (string.IsNullOrEmpty(filename))
+        {
+            State.Reset();
+            StateHasChanged();
+            return;
+        }
+
+        try
+        {
+            string runsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", "runs");
+            string filepath = Path.Combine(runsFolder, filename);
+            if (File.Exists(filepath))
+            {
+                var json = File.ReadAllText(filepath);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                State.Reset();
+
+                // 1. ExecutionPhase
+                if (root.TryGetProperty("ExecutionPhase", out var phaseProp))
+                {
+                    State.SetExecutionPhase(phaseProp.GetString() ?? "Finished");
+                }
+                else if (root.TryGetProperty("CurrentPhase", out var legacyPhaseProp))
+                {
+                    State.SetExecutionPhase(legacyPhaseProp.GetString() ?? "Finished");
+                }
+                else
+                {
+                    State.SetExecutionPhase("Finished");
+                }
+
+                // 2. ChatHistory -> ChatMessages
+                if (root.TryGetProperty("ChatHistory", out var chatHistProp))
+                {
+                    foreach (var c in chatHistProp.EnumerateArray())
+                    {
+                        State.AddChatMessage(
+                            c.GetProperty("Sender").GetString() ?? "",
+                            c.GetProperty("Content").GetString() ?? "",
+                            c.GetProperty("Vibe").GetString() ?? "Normal"
+                        );
+                    }
+                }
+
+                // 3. FilteredProperties
+                if (root.TryGetProperty("FilteredProperties", out var filtProp))
+                {
+                    State.FilteredProperties = JsonSerializer.Deserialize<List<PropertyMatch>>(filtProp.GetRawText()) ?? new();
+                }
+
+                // 4. FinalMatches
+                if (root.TryGetProperty("FinalMatches", out var finProp))
+                {
+                    State.FinalMatches = JsonSerializer.Deserialize<List<PropertyMatch>>(finProp.GetRawText()) ?? new();
+                }
+
+                // 5. ActiveNeighborhoodProfile
+                if (root.TryGetProperty("ActiveNeighborhoodProfile", out var profileProp))
+                {
+                    State.ActiveNeighborhoodProfile = JsonSerializer.Deserialize<NeighborhoodProfile>(profileProp.GetRawText());
+                }
+
+                // 6. ActiveTransitRoute
+                if (root.TryGetProperty("ActiveTransitRoute", out var routeProp))
+                {
+                    State.ActiveTransitRoute = JsonSerializer.Deserialize<TransitRoute>(routeProp.GetRawText());
+                }
+
+                // 6b. UnderwrittenProperties
+                if (root.TryGetProperty("UnderwrittenProperties", out var uwProp))
+                {
+                    State.UnderwrittenProperties = JsonSerializer.Deserialize<List<PropertyUnderwriting>>(uwProp.GetRawText()) ?? new();
+                }
+
+                // 7. ProspectusPdfPath
+                if (root.TryGetProperty("ProspectusPdfPath", out var pdfProp))
+                {
+                    State.ProspectusPdfPath = pdfProp.GetString();
+                }
+                else if (root.TryGetProperty("PdfPath", out var legacyPdfProp))
+                {
+                    State.ProspectusPdfPath = legacyPdfProp.GetString();
+                }
+
+                // 8. ExecutionLogs -> StepLogs
+                if (root.TryGetProperty("ExecutionLogs", out var logsProp))
+                {
+                    foreach (var l in logsProp.EnumerateArray())
+                    {
+                        State.AddStepLog(
+                            l.GetProperty("AgentName").GetString() ?? "",
+                            l.GetProperty("Action").GetString() ?? "",
+                            l.GetProperty("Description").GetString() ?? "",
+                            l.GetProperty("RawContent").GetString() ?? ""
+                        );
+                    }
+                }
+
+                // 9. Reconstruct Profile and Route from Risk Auditor's Tool Return in execution logs if missing (for legacy logs support)
+                if ((State.ActiveNeighborhoodProfile == null || State.ActiveTransitRoute == null) && root.TryGetProperty("ExecutionLogs", out var logsForRecon))
+                {
+                    foreach (var l in logsForRecon.EnumerateArray())
+                    {
+                        var agentName = l.GetProperty("AgentName").GetString();
+                        var action = l.GetProperty("Action").GetString();
+                        if (agentName == "Risk Auditor" && action == "Tool Return")
+                        {
+                            var rawContent = l.GetProperty("RawContent").GetString();
+                            if (!string.IsNullOrEmpty(rawContent))
+                            {
+                                try
+                                {
+                                    using var innerDoc = JsonDocument.Parse(rawContent);
+                                    var innerRoot = innerDoc.RootElement;
+                                    if (State.ActiveNeighborhoodProfile == null && innerRoot.TryGetProperty("Profile", out var pProp))
+                                    {
+                                        State.ActiveNeighborhoodProfile = JsonSerializer.Deserialize<NeighborhoodProfile>(pProp.GetRawText());
+                                    }
+                                    if (State.ActiveTransitRoute == null && innerRoot.TryGetProperty("Route", out var rProp))
+                                    {
+                                        State.ActiveTransitRoute = JsonSerializer.Deserialize<TransitRoute>(rProp.GetRawText());
+                                    }
+                                }
+                                catch {}
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            State.AddChatMessage("System", $"Error loading historical log file: {ex.Message}", "Error");
+        }
+    }
+
+    // SVG Bindings mapping state statuses to node visuals
+    private bool IsNodeActive(string agentName)
+    {
+        if (!IsThinking) return false;
+        // Use the full set so multiple nodes can pulse simultaneously
+        if (State.ActiveAgentNames.Contains(agentName)) return true;
+        if (State.RegisteredAgents.TryGetValue(agentName, out var info))
+            return info.Status == "Thinking" || info.Status == "Executing Tool";
+        return false;
+    }
+
+    private string GetNodeFill(string agentName)
+    {
+        if (IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool"))
+        {
+            return info.Status == "Executing Tool" 
+                ? "rgba(251, 191, 36, 0.12)"  // Amber
+                : "rgba(56, 189, 248, 0.12)";  // Sky blue
+        }
+
+        // Did it do anything? Check if we have logs for this agent
+        bool hasLogs = State.StepLogs.Any(l => l.AgentName == agentName);
+        if (hasLogs)
+        {
+            return "rgba(16, 185, 129, 0.08)"; // Emerald green tint for visited
+        }
+
+        return "#111827"; // Dark slate
+    }
+
+    private string GetNodeStroke(string agentName)
+    {
+        if (IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool"))
+        {
+            return info.Status == "Executing Tool" ? "#fbbf24" : "#38bdf8";
+        }
+
+        bool hasLogs = State.StepLogs.Any(l => l.AgentName == agentName);
+        if (hasLogs) return "#10b981"; // Green stroke
+
+        return "rgba(255, 255, 255, 0.1)"; // Default border
+    }
+
+    private string GetNodeStatusText(string agentName)
+    {
+        if (IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool"))
+        {
+            return info.Status.ToUpper();
+        }
+
+        bool hasLogs = State.StepLogs.Any(l => l.AgentName == agentName);
+        return hasLogs ? "VISITED" : "IDLE";
+    }
+
+    private string GetStatusColor(string agentName)
+    {
+        if (IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool"))
+        {
+            return info.Status == "Executing Tool" ? "var(--warning)" : "var(--primary)";
+        }
+
+        bool hasLogs = State.StepLogs.Any(l => l.AgentName == agentName);
+        return hasLogs ? "var(--success)" : "var(--text-muted)";
+    }
+
+    private string GetConnectionColor(string agentName)
+    {
+        if (IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool"))
+        {
+            return "var(--primary)";
+        }
+        
+        bool hasLogs = State.StepLogs.Any(l => l.AgentName == agentName);
+        return hasLogs ? "var(--success)" : "rgba(255, 255, 255, 0.15)";
+    }
+
+    private string GetConnectionDashArray(string agentName)
+    {
+        if (IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool"))
+        {
+            return "6, 4";
+        }
+        return "none";
+    }
+
+    private bool IsConnectionActive(string agentName)
+    {
+        return IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool");
+    }
+
+    private string FormatMessage(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return "";
+
+        var html = content.Replace("\n", "<br/>");
+        
+        // Detect PDF download links in chat content and render as a styled direct badge/link
+        var regex = new System.Text.RegularExpressions.Regex(@"(https?://[^\s<>""' ]+|/[^\s<>""' ]+\.pdf)");
+        html = regex.Replace(html, match => 
+            $"<a href='{match.Value}' target='_blank' style='color: var(--primary); font-weight: bold; text-decoration: underline;'>{match.Value}</a>");
+            
+        return html;
+    }
+
+    public void Dispose()
+    {
+        State.OnChange -= OnStateChanged;
+    }
+}
