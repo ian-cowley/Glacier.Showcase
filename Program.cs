@@ -10,7 +10,7 @@ builder.Services.AddHttpClient<Glacier.Showcase.Services.GeminiEmbeddingClient>(
     .AddTypedClient<Glacier.Showcase.Services.GeminiEmbeddingClient>((httpClient, sp) =>
     {
         var config = sp.GetRequiredService<IConfiguration>();
-        var apiKey = config["GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
+        var apiKey = config["GEMINI_API_KEY"] ?? config["GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
         return new Glacier.Showcase.Services.GeminiEmbeddingClient(httpClient, apiKey);
     });
 builder.Services.AddSingleton<Glacier.Showcase.Services.AirbnbDataService>();

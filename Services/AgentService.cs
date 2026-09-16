@@ -421,7 +421,7 @@ public class AgentService
         IConfiguration config)
     {
         State = state;
-        string apiKey = config["GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
+        string apiKey = config["GEMINI_API_KEY"] ?? config["GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
         _llmService = !string.IsNullOrEmpty(apiKey) ? new GeminiService(apiKey) : null!;
 
         // Instantiate Specialist Agents
