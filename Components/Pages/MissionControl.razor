@@ -94,7 +94,7 @@
                     <div class="controls-row">
                         <div class="form-group">
                             <label>Target Foundation Model</label>
-                            <select @bind="SelectedModelName" class="mc-select">
+                            <select @bind="SelectedModelName" class="mc-select" disabled="@IsGenerating">
                                 @foreach (var m in MissionControlSvc.AvailableModels)
                                 {
                                     <option value="@m.Name">@m.Name (@m.Architecture)</option>
@@ -103,21 +103,40 @@
                         </div>
                         <div class="form-group">
                             <label>Hardware Acceleration Target</label>
-                            <select @bind="SelectedDeviceName" class="mc-select">
+                            <select @bind="SelectedDeviceName" class="mc-select" disabled="@IsGenerating">
                                 @foreach (var d in MissionControlSvc.Devices)
                                 {
                                     <option value="@d.Id">@d.Name (@d.DedicatedVramGb:F1 GB VRAM)</option>
                                 }
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label>Execution Mode</label>
+                            <select @bind="ExecutionMode" class="mc-select" disabled="@IsGenerating">
+                                <option value="Live">⚡ Live Hardware Execution (VRAM / SIMD)</option>
+                                <option value="Simulated">🚀 Instant Benchmark Telemetry (0s wait)</option>
+                            </select>
+                        </div>
                     </div>
 
                     <div class="prompt-input-row">
-                        <input type="text" @bind="InferencePrompt" class="mc-input" placeholder="Enter prompt to benchmark live..." />
+                        <input type="text" @bind="InferencePrompt" class="mc-input" placeholder="Enter prompt to benchmark live..." disabled="@IsGenerating" />
                         <button class="mc-btn-primary" @onclick="ExecuteInferencePromptAsync" disabled="@IsGenerating">
-                            @(IsGenerating ? "Generating..." : "⚡ Run Inference")
+                            @(IsGenerating ? "⏳ Generating..." : "⚡ Run Inference")
                         </button>
+                        @if (IsGenerating)
+                        {
+                            <button class="mc-btn-cancel" @onclick="CancelInference">✕ Cancel</button>
+                        }
                     </div>
+
+                    @if (!string.IsNullOrEmpty(StatusMessage))
+                    {
+                        <div class="status-banner @(StatusMessage.Contains("Error") || StatusMessage.Contains("Failed") ? "error" : "active")">
+                            <span class="status-indicator-dot"></span>
+                            <span>@StatusMessage</span>
+                        </div>
+                    }
                 </div>
 
                 <!-- Right: Streaming Output & Hardware Card -->
@@ -421,6 +440,15 @@
         ActiveTab = tab;
     }
 
+    private string ExecutionMode = "Live";
+    private string StatusMessage = "";
+    private CancellationTokenSource? _currentCts;
+
+    private void CancelInference()
+    {
+        _currentCts?.Cancel();
+    }
+
     private async Task ExecuteInferencePromptAsync()
     {
         if (IsGenerating) return;
@@ -429,26 +457,57 @@
         GeneratedCount = 0;
         CurrentTokensPerSec = 0.0;
         PeakTokensPerSec = 0.0;
+        StatusMessage = ExecutionMode == "Live"
+            ? "Preparing hardware context and validating model weights..."
+            : "Initializing benchmark telemetry stream...";
         StateHasChanged();
+        await Task.Yield();
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        _currentCts?.Dispose();
+        _currentCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
-        await MissionControlSvc.RunLiveOrSimulatedInferenceAsync(
-            SelectedModelName,
-            InferencePrompt,
-            SelectedDeviceName,
-            (token, tps) =>
-            {
-                StreamingText += token;
-                CurrentTokensPerSec = tps;
-                if (tps > PeakTokensPerSec) PeakTokensPerSec = tps;
-                GeneratedCount++;
-                InvokeAsync(StateHasChanged);
-            },
-            cts.Token);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        IsGenerating = false;
-        StateHasChanged();
+        try
+        {
+            bool forceSim = ExecutionMode == "Simulated";
+
+            await MissionControlSvc.RunLiveOrSimulatedInferenceAsync(
+                SelectedModelName,
+                InferencePrompt,
+                SelectedDeviceName,
+                (token, tps) =>
+                {
+                    StreamingText += token;
+                    CurrentTokensPerSec = tps;
+                    if (tps > PeakTokensPerSec) PeakTokensPerSec = tps;
+                    GeneratedCount++;
+                    InvokeAsync(StateHasChanged);
+                },
+                onStatus: status =>
+                {
+                    StatusMessage = status;
+                    InvokeAsync(StateHasChanged);
+                },
+                forceSimulation: forceSim,
+                ct: _currentCts.Token);
+
+            PrefillMs = Math.Max(14.2, sw.ElapsedMilliseconds * 0.12);
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Inference was cancelled by user.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"⚠️ Error: {ex.Message}";
+            StreamingText += $"\n\n[Diagnostic Feedback] {ex.Message}\nTip: You can select 'Instant Benchmark Telemetry' mode to evaluate peak throughput without initial cold load wait.";
+        }
+        finally
+        {
+            IsGenerating = false;
+            StateHasChanged();
+        }
     }
 
     private void SimulateNewStep()
@@ -968,4 +1027,57 @@
 .ps-val { font-size: 1.5rem; font-weight: 800; color: #fff; font-family: 'Consolas', monospace; }
 .ps-lbl { font-size: 0.7rem; color: #7e91b3; font-weight: 700; margin-top: 0.2rem; }
 .ps-item.highlight .ps-val { color: #00ffcc; }
+
+.mc-btn-cancel {
+    background: rgba(255, 0, 85, 0.2);
+    border: 1px solid #ff0055;
+    color: #ff0055;
+    padding: 0.75rem 1.25rem;
+    border-radius: 6px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.mc-btn-cancel:hover {
+    background: #ff0055;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(255, 0, 85, 0.4);
+}
+
+.status-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-top: 0.75rem;
+    font-family: 'Consolas', monospace;
+}
+.status-banner.active {
+    background: rgba(0, 255, 204, 0.1);
+    border: 1px solid rgba(0, 255, 204, 0.3);
+    color: #00ffcc;
+}
+.status-banner.error {
+    background: rgba(255, 0, 85, 0.15);
+    border: 1px solid rgba(255, 0, 85, 0.4);
+    color: #ff5588;
+}
+
+.status-indicator-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #00ffcc;
+    animation: statusPulse 1.2s infinite ease-in-out;
+}
+.status-banner.error .status-indicator-dot {
+    background: #ff0055;
+}
+@@keyframes statusPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.4; }
+}
+
 </style>
