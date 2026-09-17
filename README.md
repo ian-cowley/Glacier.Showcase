@@ -28,6 +28,17 @@ Then navigate to **`http://localhost:5000/mission-control`** in your browser.
 
 ---
 
+## 🖼️ Visual Gallery: Real Mission Control Cockpits
+
+All screens below are captured directly from the live `Glacier.Showcase` Blazor application running on .NET 10:
+
+| Mission Control Real-Time Cockpit | Ecosystem Architecture & Engine Cockpit |
+| :---: | :---: |
+| ![Mission Control](docs/images/showcase_mission_control.png) | ![Home Architecture Cockpit](docs/images/showcase_home_cockpit.png) |
+| *Real-time telemetry gauges, PagedAttention memory maps, and 3D graph exploration* | *Interactive multi-engine routing matrix across CPU AVX-512 and GPU hardware* |
+
+---
+
 ## 🎯 The Five Mission Control Visual Cockpits
 
 | Visual Cockpit | Ecosystem Engine | Headline Capability & Benchmark |
