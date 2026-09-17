@@ -13,7 +13,7 @@ graph TD
     subgraph L4["Layer 4: Unified Applications & Serving"]
         CLI["glacier CLI<br/>(Unified Global Tool: run, tune, merge, rag, serve)"]
         SHOWCASE["Glacier.Showcase<br/>(Real-Time Visual Mission Control Blazor App)"]
-        SERVE["Glacier.Serve<br/>(7M req/s PagedAttention Continuous Batching Server)"]
+        SERVE["Glacier.Serve<br/>(17k req/s Turnaround / 100M req/s Parser)"]
         RAG["Glacier.Rag<br/>(Native In-Process GraphRAG Engine)"]
     end
 
@@ -25,7 +25,7 @@ graph TD
     end
 
     subgraph L2["Layer 2: Memory & KV Virtualization Layer"]
-        PAGED["PagedBlockPool & BlockTable<br/>(16-Token Dynamic Physical Pages - 87.5% VRAM Saved)"]
+        PAGED["PagedBlockPool & BlockTable<br/>(16-Token Dynamic Physical Pages - 96.13% VRAM Saved)"]
         MMF["Memory-Mapped GGUF Parser<br/>(Zero-Copy Virtual Address Slicing)"]
         CSR["Forward Star CSR Buffers<br/>(Zero GC Adjacency Indices)"]
     end
