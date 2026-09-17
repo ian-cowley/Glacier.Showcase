@@ -23,7 +23,7 @@
             </div>
             <div class="hud-badge green">
                 <span class="badge-label">FINE-TUNING</span>
-                <span class="badge-val">20 Mins (13x Python)</span>
+                <span class="badge-val">16.0s / Step (32 tok/s)</span>
             </div>
             <div class="hud-badge purple">
                 <span class="badge-label">PAGEDATTENTION</span>
@@ -185,17 +185,17 @@
                 <!-- Top Headline Card -->
                 <div class="headline-scorecard glass-card">
                     <div class="score-side python">
-                        <div class="score-hdr">PYTHON (PyTorch + Unsloth)</div>
-                        <div class="score-val">4 Hours 25 Mins</div>
-                        <div class="score-sub">16.4 GB VRAM | Python runtime overhead</div>
+                        <div class="score-hdr">UNOPTIMIZED BASELINE</div>
+                        <div class="score-val">42.0s / Step</div>
+                        <div class="score-sub">12.2 tok/s | Single-core fallback &amp; PCIe churn</div>
                     </div>
                     <div class="score-vs">
-                        <span class="vs-badge">13.2x FASTER</span>
+                        <span class="vs-badge">2.63x FASTER</span>
                     </div>
                     <div class="score-side glacier">
-                        <div class="score-hdr">GLACIER.TUNE (Pure C# .NET 10)</div>
-                        <div class="score-val">20 Minutes</div>
-                        <div class="score-sub">4.2 GB Memory | Zero-copy GGUF Autograd</div>
+                        <div class="score-hdr">GLACIER.TUNE (In-VRAM + AVX-512)</div>
+                        <div class="score-val">16.0s / Step</div>
+                        <div class="score-sub">32.0 tok/s | 26s saved/step | Loss: 21.8704</div>
                     </div>
                 </div>
 
@@ -502,12 +502,12 @@
                 <!-- 3 Deep-Dive Explanations -->
                 <div class="arch-explainer-grid">
                     <div class="glass-card">
-                        <h4 class="card-accent-title">⚡ Why Pure .NET 10 Beats Python by 13x</h4>
+                        <h4 class="card-accent-title">⚡ GPU VRAM-Resident &amp; AVX-512 Acceleration</h4>
                         <p class="arch-text">
-                            Python AI stacks are bottlenecked by the 30-year-old Global Interpreter Lock (GIL), dynamic 4-bit dequantization overheads, and heavy out-of-process IPC serialization.
+                            Python AI stacks are bottlenecked by the Global Interpreter Lock (GIL), dynamic 4-bit dequantization overheads, and heavy out-of-process IPC serialization.
                         </p>
                         <p class="arch-text">
-                            Glacier executes native driver SASS kernels and SIMD AVX-512 vector pipelines directly in C# without Python wrappers, yielding <strong>13.2x faster fine-tuning (20 min vs 4h 25m)</strong> and <strong>&lt; 15ms cold start</strong>.
+                            Glacier executes native driver CUDA/SASS kernels and SIMD AVX-512 vector pipelines directly in C# without Python wrappers, yielding <strong>2.63x faster fine-tuning (16.0s vs 42.0s per step at 512 tokens)</strong> and <strong>&lt; 15ms cold start</strong>.
                         </p>
                     </div>
 

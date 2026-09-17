@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
     <PackageReference Include="OpenTelemetry.Api" Version="1.15.3" />
@@ -7,7 +7,7 @@
     <PackageReference Include="Glacier.Tune" Version="1.0.3" />
     <PackageReference Include="Glacier.Serve" Version="1.1.0" />
     <PackageReference Include="Glacier.Rag" Version="1.0.0" />
-    <PackageReference Include="Glacier.Gpu" Version="1.0.5" />
+    <PackageReference Include="Glacier.Gpu" Version="1.0.6" />
 </ItemGroup>
 
   <ItemGroup>

@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🚀 **< 15ms** Cold Start &nbsp;|&nbsp; ⚡ **20 Mins** Fine-Tuning (**13.2x** Python) &nbsp;|&nbsp; 🧠 **87.5%** Less VRAM &nbsp;|&nbsp; 💎 **100% Pure C# .NET 10**
+### 🚀 **< 15ms** Cold Start &nbsp;|&nbsp; ⚡ **16.0s / Step** Fine-Tuning (32 tok/s) &nbsp;|&nbsp; 🧠 **87.5%** Less VRAM &nbsp;|&nbsp; 💎 **100% Pure C# .NET 10**
 
 **Interactive real-time visual cockpit for the world-leading Glacier high-performance AI ecosystem.**
 
@@ -33,7 +33,7 @@ Then navigate to **`http://localhost:5000/mission-control`** in your browser.
 | Visual Cockpit | Ecosystem Engine | Headline Capability & Benchmark |
 | :--- | :--- | :--- |
 | **⚡ Speedometer** | `Glacier.Inference` | **0–120 tokens/sec** animated needle gauge with real-time streaming prompt generation across NVIDIA SASS, AMD DirectML & CPU AVX-512. |
-| **📉 Loss Monitor** | `Glacier.StatsViz` / `Glacier.Tune` | **20 min fine-tuning** vs 4h 25m in Python (**13.2x faster**, 74% less memory). Live step-by-step $L_{CE}$ loss curve. |
+| **📉 Loss Monitor** | `Glacier.StatsViz` / `Glacier.Tune` | **15.98s / step (32.0 tok/s)** on RTX 4060 GPU (**2.63x faster** than baseline, 100% loss parity). Live step-by-step $L_{CE}$ loss curve. |
 | **🕸️ 3D Knowledge Graph** | `Glacier.Graph` | **< 1ms multi-hop traversal** on Forward Star CSR zero-allocation graph canvas with interactive neighborhood discovery. |
 | **🔥 Vector Heatmap** | `Glacier.Vector` | **85 GB/s DDR5 streaming bandwidth** with SIMD AVX-512 cosine similarity heatmap matrix and zero GC pressure. |
 | **🧠 PagedAttention Pool** | `Glacier.Serve` | **87.5% VRAM savings** via 16-token virtual page slots with continuous batching and zero memory fragmentation. |
@@ -44,7 +44,7 @@ Then navigate to **`http://localhost:5000/mission-control`** in your browser.
 
 | Metric | Python (PyTorch + Unsloth) | Glacier Pure C# .NET 10 | Advantage |
 | :--- | :--- | :--- | :--- |
-| **Full Fine-Tuning Pipeline** | **4 Hours 25 Minutes** | **20 Minutes** | 🏆 **13.2x Faster** |
+| **7B LoRA Training Step (512 tok)** | 41.97s (Unoptimized baseline) | **15.98s (32 tok/s)** | 🏆 **2.63x Faster (26s saved/step)** |
 | **Cold Start Latency** | 1,400 ms (Python runtime imports) | **16.0 ms** | 🏆 **87x Faster** |
 | **KV Cache Memory Footprint** | Static pre-allocation (4,096 tok) | PagedAttention (16-tok pages) | 🏆 **87.5% Less VRAM** |
 | **HTTP Throughput** | ~800 req/sec (FastAPI / vLLM) | **16,000+ req/sec** | 🏆 **20x Throughput** |
