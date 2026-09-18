@@ -27,11 +27,32 @@ public class GpuAccelerationBenchmarkService
     {
         get
         {
-            if (Glacier.Tensor.Compute.GpuAccelerator.HasNvidiaGpu)
-                return "NVIDIA GeForce RTX 4060 Laptop GPU (Ada Lovelace sm_89)";
-            if (Glacier.Tensor.Compute.GpuAccelerator.HasAmdGpu)
-                return "AMD Radeon 890M Graphics (RDNA 3.5 APU)";
-            return "AMD Ryzen AI 9 HX 370 (Zen 5 AVX-512)";
+            try
+            {
+                var optimalDev = Glacier.Inference.Hardware.DeviceManager.GetOptimalDevice();
+                if (optimalDev != null && optimalDev.Vendor != Glacier.Inference.Hardware.GpuVendor.Cpu)
+                {
+                    string vramMb = $"{optimalDev.DedicatedVramBytes / (1024 * 1024):N0} MB Dedicated VRAM";
+                    return $"{optimalDev.Name} ({optimalDev.Vendor}, {vramMb})";
+                }
+
+                var adapters = Glacier.Gpu.Drivers.DirectMlDriver.GetAdapters();
+                if (adapters.Count > 0)
+                {
+                    var a = adapters[0];
+                    string vramMb = $"{a.DedicatedVramBytes / (1024 * 1024):N0} MB Dedicated VRAM";
+                    return $"{a.Description} ({vramMb})";
+                }
+            }
+            catch
+            {
+                // Fallback to CPU environment description
+            }
+
+            string cpuName = Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER") ?? "Host CPU";
+            string simd = System.Runtime.Intrinsics.Vector512.IsHardwareAccelerated ? "AVX-512" :
+                          System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated ? "AVX2" : "SIMD";
+            return $"{cpuName} ({simd})";
         }
     }
 
