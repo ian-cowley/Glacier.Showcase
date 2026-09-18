@@ -8,8 +8,10 @@
 
 **Interactive real-time visual cockpit for the world-leading Glacier high-performance AI ecosystem.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
+[![Native AOT](https://img.shields.io/badge/Native%20AOT-Ready-brightgreen.svg)](https://learn.microsoft.com/dotnet/core/deploying/native-aot/)
+[![Ecosystem](https://img.shields.io/badge/Glacier-Ecosystem-blue)](https://github.com/ian-cowley)
 [![Zero Python](https://img.shields.io/badge/Python%20Dependencies-0-success.svg)](https://github.com/ian-cowley)
 [![Zero Native DLLs](https://img.shields.io/badge/Native%20C%2B%2B%20DLLs-0-success.svg)](https://github.com/ian-cowley)
 
