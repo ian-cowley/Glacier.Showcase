@@ -80,5 +80,12 @@ All screens below are captured directly from the live `Glacier.Showcase` Blazor 
 
 ---
 
+## Credits
+
+Developed by **Ian Cowley** and **Antigravity (Google DeepMind)**.
+
+---
+
 ## 📄 License
 MIT License. High-Performance Pure C# .NET 10 Ecosystem.
+
