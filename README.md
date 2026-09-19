@@ -72,5 +72,13 @@ All screens below are captured directly from the live `Glacier.Showcase` Blazor 
 
 ---
 
+## 🆕 What's New in v1.0.1
+
+- **Authentic DXGI/Win32 hardware discovery** — replaces the previous seeded `Random` stub with real DirectX 12 device enumeration via `IDXGIFactory6`.
+- **Real-time GPU telemetry from DirectX 12 device enumeration** — actual adapter VRAM, vendor, and feature level reported from the hardware.
+- **Full test suite authored from scratch** — **12 tests** covering hardware discovery, telemetry, and showcase pipeline correctness.
+
+---
+
 ## 📄 License
 MIT License. High-Performance Pure C# .NET 10 Ecosystem.
