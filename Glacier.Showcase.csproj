@@ -3,11 +3,11 @@
   <ItemGroup>
     <PackageReference Include="OpenTelemetry.Api" Version="1.15.3" />
   
-    <PackageReference Include="Glacier.Inference" Version="1.2.2" />
+    <PackageReference Include="Glacier.Inference" Version="1.2.3" />
     <PackageReference Include="Glacier.Tune" Version="1.0.5" />
-    <PackageReference Include="Glacier.Serve" Version="1.1.1" />
+    <PackageReference Include="Glacier.Serve" Version="1.1.2" />
     <PackageReference Include="Glacier.Rag" Version="1.0.2" />
-    <PackageReference Include="Glacier.Gpu" Version="1.0.7" />
+    <PackageReference Include="Glacier.Gpu" Version="1.0.8" />
   </ItemGroup>
 
   <ItemGroup>
