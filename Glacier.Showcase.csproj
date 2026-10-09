@@ -31,6 +31,8 @@
     <PackageReference Include="Glacier.StatsViz" Version="1.0.4" />
     <PackageReference Include="Glacier.DocTree" Version="1.0.5" />
     <PackageReference Include="Glacier.Graph" Version="1.0.4" />
+    <PackageReference Include="Glacier.AgentDevKit.Adk" Version="1.0.5" />
+    <PackageReference Include="TinyPdf" Version="0.1.11" />
   </ItemGroup>
 
   <PropertyGroup>
