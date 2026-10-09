@@ -187,9 +187,13 @@ public class GpuAccelerationBenchmarkService
         new Span<float>(a.DataPointer, m * k).Fill(0.5f);
         new Span<float>(b.DataPointer, k * n).Fill(0.25f);
 
+        var target = Glacier.Tensor.Compute.GpuAccelerator.HasNvidiaGpu
+            ? Glacier.Tensor.Compute.GpuTarget.NvidiaTensorCore
+            : Glacier.Tensor.Compute.GpuTarget.Auto;
+
         // Warmup
         Glacier.Tensor.Compute.GpuAccelerator.AcceleratedMatMul(a, b, cpuC, Glacier.Tensor.Compute.GpuTarget.Cpu);
-        Glacier.Tensor.Compute.GpuAccelerator.AcceleratedMatMul(a, b, gpuC, Glacier.Tensor.Compute.GpuTarget.NvidiaTensorCore);
+        Glacier.Tensor.Compute.GpuAccelerator.AcceleratedMatMul(a, b, gpuC, target);
 
         var sw = Stopwatch.StartNew();
         Glacier.Tensor.Compute.GpuAccelerator.AcceleratedMatMul(a, b, cpuC, Glacier.Tensor.Compute.GpuTarget.Cpu);
@@ -198,7 +202,7 @@ public class GpuAccelerationBenchmarkService
 
         sw.Restart();
         for (int i = 0; i < 5; i++)
-            Glacier.Tensor.Compute.GpuAccelerator.AcceleratedMatMul(a, b, gpuC, Glacier.Tensor.Compute.GpuTarget.NvidiaTensorCore);
+            Glacier.Tensor.Compute.GpuAccelerator.AcceleratedMatMul(a, b, gpuC, target);
         sw.Stop();
         double gpuMs = sw.Elapsed.TotalMilliseconds / 5.0;
 

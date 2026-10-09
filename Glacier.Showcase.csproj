@@ -7,10 +7,10 @@
     <PackageReference Include="Glacier.Tune" Version="1.0.5" />
     <PackageReference Include="Glacier.Serve" Version="1.1.2" />
     <PackageReference Include="Glacier.Rag" Version="1.0.3" />
-    <PackageReference Include="Glacier.Gpu" Version="1.0.8" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('..\Glacier.Polaris\src\Glacier.Polaris\Glacier.Polaris.csproj')">
+    <ProjectReference Include="..\Glacier.Gpu\src\Glacier.Gpu\Glacier.Gpu.csproj" />
     <ProjectReference Include="..\Glacier.Polaris\src\Glacier.Polaris\Glacier.Polaris.csproj" />
     <ProjectReference Include="..\Glacier.Vector\src\Glacier.Vector\Glacier.Vector.csproj" />
     <ProjectReference Include="..\Glacier.ML\src\Glacier.ML\Glacier.ML.csproj" />
@@ -23,6 +23,7 @@
     <ProjectReference Include="..\Glacier.Graph\src\Glacier.Graph\Glacier.Graph.csproj" />
   </ItemGroup>
   <ItemGroup Condition="!Exists('..\Glacier.Polaris\src\Glacier.Polaris\Glacier.Polaris.csproj')">
+    <PackageReference Include="Glacier.Gpu" Version="1.0.9" />
     <PackageReference Include="Glacier.Polaris" Version="1.0.20" />
     <PackageReference Include="Glacier.Vector" Version="1.0.7" />
     <PackageReference Include="Glacier.ML" Version="1.0.4" />
