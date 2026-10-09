@@ -1,6 +1,6 @@
 name: Glacier.Showcase CI Pipeline
 
-on:
+'on':
   push:
     branches: [main, master]
   pull_request:
@@ -50,7 +50,7 @@ jobs:
         run: dotnet build Glacier.Showcase.csproj --configuration Release --no-restore
 
       - name: Run unit & integration tests
-        run: dotnet test tests/Glacier.Showcase.Tests/Glacier.Showcase.Tests.csproj --configuration Release --no-restore --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test tests/Glacier.Showcase.Tests/Glacier.Showcase.Tests.csproj --configuration Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
       - name: Publish Blazor application
         run: dotnet publish Glacier.Showcase.csproj --configuration Release --no-build --output ./publish
