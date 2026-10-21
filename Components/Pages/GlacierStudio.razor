@@ -1,0 +1,765 @@
+@page "/studio"
+@page "/antigravity"
+@using System.IO
+@using System.Runtime.InteropServices
+@using System.Runtime.Intrinsics
+@using Glacier.Showcase.Services.GlacierStudio
+@using Glacier.Inference.Hardware
+@inject GlacierStudioState StudioState
+@inject GlacierAgentEngine AgentEngine
+@inject GlacierConsoleService ConsoleService
+@inject GlacierDocTreePreviewService DocPreviewService
+@inject GlacierMcpManager McpManager
+@inject IJSRuntime JS
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Glacier Agent Studio (Antigravity 2) - Pure .NET 10</PageTitle>
+
+<div class="gs-container">
+    <!-- 1. LEFT SIDEBAR: CONVERSATIONS, SEARCH, EXPORT & MODEL SETTINGS -->
+    <aside class="gs-sidebar">
+        <div class="gs-brand">
+            <span class="gs-brand-icon">❄️</span>
+            <div>
+                <div class="d-flex align-items-center">
+                    <span class="gs-brand-title">GLACIER STUDIO</span>
+                    <span class="gs-brand-badge">AGY 2</span>
+                </div>
+                <div class="gs-brand-subtitle">Autonomous .NET 10 Cockpit</div>
+            </div>
+        </div>
+
+        <button class="gs-new-chat-btn" @onclick="CreateNewChat">
+            <span>+</span> New Conversation
+        </button>
+
+        <!-- Session Search Box -->
+        <div class="gs-session-search-box">
+            <span class="gs-search-icon">🔍</span>
+            <input class="gs-session-search-input" 
+                   placeholder="Search sessions..." 
+                   @bind="StudioState.SessionSearchQuery" 
+                   @bind:event="oninput" />
+            @if (!string.IsNullOrEmpty(StudioState.SessionSearchQuery))
+            {
+                <button class="gs-search-clear-btn" @onclick='() => StudioState.SessionSearchQuery = ""'>✕</button>
+            }
+        </div>
+
+        <!-- Sessions List -->
+        <div class="gs-sessions-section">
+            <div class="gs-section-label">
+                <span>Conversations</span>
+                <span class="gs-session-count-badge">@StudioState.Sessions.Count</span>
+            </div>
+
+            @{
+                var filtered = StudioState.FilteredSessions.ToList();
+            }
+
+            @if (filtered.Count == 0)
+            {
+                <div class="gs-no-sessions">No matching conversations</div>
+            }
+
+            @foreach (var s in filtered)
+            {
+                <div class="gs-session-item @(s.Id == StudioState.ActiveSession.Id ? "active" : "")"
+                     @onclick="() => SelectSession(s.Id)">
+                    <div style="overflow: hidden;">
+                        <div class="gs-session-title" title="@s.Title">@s.Title</div>
+                        <div class="gs-session-time">@s.UpdatedAt.ToString("HH:mm") • @s.Messages.Count msgs</div>
+                    </div>
+                    @if (StudioState.Sessions.Count > 1)
+                    {
+                        <button class="gs-session-delete" 
+                                @onclick:stopPropagation="true" 
+                                @onclick="() => DeleteSession(s.Id)" 
+                                title="Delete session">✕</button>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Sidebar Model Server Configuration -->
+        <div class="gs-settings-box">
+            <div class="gs-setting-group">
+                <label class="gs-setting-label">MODEL PROVIDER</label>
+                <select class="gs-select" @onchange="OnProviderChanged">
+                    <option value="LocalOllama" selected="@(StudioState.Provider == ModelServerProvider.LocalOllama)">Local Ollama (11434)</option>
+                    <option value="LocalGlacierInference" selected="@(StudioState.Provider == ModelServerProvider.LocalGlacierInference)">Local Glacier.Inference (11434)</option>
+                    <option value="LocalLMStudio" selected="@(StudioState.Provider == ModelServerProvider.LocalLMStudio)">Local LM Studio (1234)</option>
+                    <option value="RemoteGemini" selected="@(StudioState.Provider == ModelServerProvider.RemoteGemini)">Cloud Gemini (Google AI)</option>
+                    <option value="RemoteOpenAI" selected="@(StudioState.Provider == ModelServerProvider.RemoteOpenAI)">Cloud OpenAI</option>
+                    <option value="LocalCustom" selected="@(StudioState.Provider == ModelServerProvider.LocalCustom)">Custom Endpoint</option>
+                </select>
+            </div>
+
+            <div class="gs-setting-group">
+                <label class="gs-setting-label">MODEL PRESETS</label>
+                <select class="gs-select" @onchange="OnModelPresetSelected">
+                    @foreach (var preset in StudioState.GetModelPresetsForProvider(StudioState.Provider))
+                    {
+                        <option value="@preset" selected="@(StudioState.SelectedModel == preset)">@preset</option>
+                    }
+                </select>
+            </div>
+
+            <div class="gs-setting-group">
+                <label class="gs-setting-label">ENDPOINT URL</label>
+                <input class="gs-input" @bind="StudioState.EndpointUrl" placeholder="http://127.0.0.1:11434/v1" />
+            </div>
+
+            <div class="gs-setting-group">
+                <label class="gs-setting-label">MODEL NAME</label>
+                <input class="gs-input" @bind="StudioState.SelectedModel" placeholder="llama3.2 or custom-model" />
+            </div>
+
+            @if (StudioState.Provider == ModelServerProvider.RemoteGemini || StudioState.Provider == ModelServerProvider.RemoteOpenAI || StudioState.Provider == ModelServerProvider.RemoteCustom)
+            {
+                <div class="gs-setting-group">
+                    <label class="gs-setting-label">API KEY (In-Memory Only)</label>
+                    <input type="password" class="gs-input" @bind="StudioState.ApiKey" placeholder="Loaded from env or enter session key" />
+                </div>
+            }
+
+            <div class="gs-toggle-row">
+                <span class="gs-toggle-label">Autonomous ReAct Loop</span>
+                <input type="checkbox" @bind="StudioState.IsAgentMode" />
+            </div>
+        </div>
+
+        <div class="gs-workspace-footer">
+            <span>📁</span>
+            <span class="gs-workspace-pill" title="@ConsoleService.CurrentWorkingDirectory">
+                @Path.GetFileName(ConsoleService.CurrentWorkingDirectory)
+            </span>
+            <span style="margin-left:auto; color:#10b981;">● Online</span>
+        </div>
+    </aside>
+
+    <!-- 2. MIDDLE CHAT & AGENT CANVAS -->
+    <main class="gs-chat-panel">
+        <header class="gs-chat-header">
+            <div class="gs-chat-header-left">
+                <span class="gs-chat-header-title">@StudioState.ActiveSession.Title</span>
+                <span class="gs-model-pill">@StudioState.GetModelDisplayName()</span>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <!-- Session Export Actions -->
+                <button class="gs-btn-export" @onclick='() => ExportSession("md")' title="Export active session to Markdown file (.md)">
+                    📥 Export .md
+                </button>
+                <button class="gs-btn-export" @onclick='() => ExportSession("json")' title="Export active session to JSON file (.json)">
+                    📥 Export .json
+                </button>
+                <span class="gs-status-badge @StudioState.ExecutionStatus.ToString().ToLowerInvariant()">
+                    @StudioState.StatusText
+                </span>
+            </div>
+        </header>
+
+        @if (!string.IsNullOrEmpty(ExportNotification))
+        {
+            <div class="gs-export-banner">
+                <span>✓ @ExportNotification</span>
+                <button class="gs-banner-close" @onclick='() => ExportNotification = ""'>✕</button>
+            </div>
+        }
+
+        <div class="gs-chat-messages" id="messagesContainer">
+            @foreach (var msg in StudioState.ActiveSession.Messages)
+            {
+                if (msg.Role == "tool") continue; // Tool output rendered inside assistant card
+
+                var (cleanContent, thoughtContent) = ExtractThinking(msg);
+
+                <div class="gs-message-card @msg.Role">
+                    @if (msg.Role == "assistant")
+                    {
+                        <div class="gs-avatar assistant">❄️</div>
+                    }
+
+                    <div class="gs-message-content-wrapper">
+                        <!-- Collapsible Thinking / Reasoning Block -->
+                        @if (!string.IsNullOrEmpty(thoughtContent))
+                        {
+                            bool isExpanded = IsThinkingExpanded(msg);
+                            <div class="gs-thinking-card">
+                                <div class="gs-thinking-header" @onclick="() => ToggleThinking(msg)">
+                                    <span>🧠</span>
+                                    <span>Deep Reasoning Process</span>
+                                    <span class="gs-thinking-toggle-btn">
+                                        @(isExpanded ? "▲ Hide" : "▼ Show")
+                                    </span>
+                                </div>
+                                @if (isExpanded)
+                                {
+                                    <div class="gs-thinking-body">@((MarkupString)GlacierMarkdownRenderer.Render(thoughtContent))</div>
+                                }
+                            </div>
+                        }
+
+                        <!-- Tool Execution Cards -->
+                        @if (msg.ToolCalls.Count > 0)
+                        {
+                            @foreach (var tool in msg.ToolCalls)
+                            {
+                                <div class="gs-tool-call-card @(tool.IsSuccess ? "success" : "failed")">
+                                    <div class="gs-tool-call-header" @onclick="() => tool.IsExpanded = !tool.IsExpanded">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <span>🛠️</span>
+                                            <span class="gs-tool-call-badge">@tool.ToolName</span>
+                                            @if (tool.IsSuccess)
+                                            {
+                                                <span class="gs-tool-status-pill success">✓ Success</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="gs-tool-status-pill failed">✕ Failed</span>
+                                            }
+                                            <span class="gs-tool-duration">(@tool.Duration.TotalMilliseconds.ToString("F0") ms)</span>
+                                        </div>
+                                        <span class="gs-tool-toggle">@(tool.IsExpanded ? "▲ Hide" : "▼ Details")</span>
+                                    </div>
+                                    @if (tool.IsExpanded)
+                                    {
+                                        <div class="gs-tool-call-details">
+                                            <div class="gs-tool-section-label">INPUT ARGUMENTS</div>
+                                            <pre class="gs-tool-call-args"><code>@tool.ArgumentsJson</code></pre>
+                                            @if (!string.IsNullOrEmpty(tool.ResultOutput))
+                                            {
+                                                <div class="gs-tool-section-label">EXECUTION TELEMETRY</div>
+                                                <pre class="gs-tool-call-result"><code>@tool.ResultOutput</code></pre>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+
+                        <!-- Message Body with Live Markdown Rendering -->
+                        @if (!string.IsNullOrEmpty(cleanContent))
+                        {
+                            <div class="gs-message-bubble">
+                                @((MarkupString)GlacierMarkdownRenderer.Render(cleanContent))
+                            </div>
+                        }
+                    </div>
+
+                    @if (msg.Role == "user")
+                    {
+                        <div class="gs-avatar user">👤</div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Chat Input Bar -->
+        <div class="gs-chat-input-bar">
+            <!-- Slash command shortcuts -->
+            <div class="gs-slash-pills">
+                <span class="gs-slash-pill" @onclick='() => SetInput("/help")'>/help</span>
+                <span class="gs-slash-pill" @onclick='() => SetInput("/terminal git status")'>/terminal</span>
+                <span class="gs-slash-pill" @onclick='() => SetInput("/inspect README.md")'>/inspect</span>
+                <span class="gs-slash-pill" @onclick='() => SetInput("/mcp")'>/mcp</span>
+                <span class="gs-slash-pill" @onclick='() => SetInput("/plan ")'>/plan</span>
+                <span class="gs-slash-pill" @onclick='() => SetInput("/clear")'>/clear</span>
+            </div>
+
+            <div class="gs-input-row">
+                <textarea class="gs-textarea" 
+                          placeholder="Ask Glacier Agent, run code, or type a slash command (e.g. /terminal, /inspect)..."
+                          @bind="CurrentInput"
+                          @bind:event="oninput"
+                          @onkeydown="HandleKeyDown"
+                          rows="2"></textarea>
+
+                @if (StudioState.ExecutionStatus == AgentExecutionStatus.Thinking || 
+                     StudioState.ExecutionStatus == AgentExecutionStatus.StreamingResponse || 
+                     StudioState.ExecutionStatus == AgentExecutionStatus.ExecutingTool || 
+                     StudioState.ExecutionStatus == AgentExecutionStatus.ExecutingTools)
+                {
+                    <button class="gs-btn-stop" @onclick="CancelExecution">■ Stop</button>
+                }
+                else
+                {
+                    <button class="gs-btn-send" @onclick="SendMessageAsync">Send ↵</button>
+                }
+            </div>
+        </div>
+    </main>
+
+    <!-- 3. RIGHT AUXILIARY PANEL: DOC PREVIEWS, CONSOLE, MCP & TELEMETRY -->
+    <aside class="gs-aux-panel">
+        <nav class="gs-aux-nav">
+            <button class="gs-aux-tab @(StudioState.ActiveRightTab == "doc" ? "active" : "")"
+                    @onclick='() => StudioState.ActiveRightTab = "doc"'>
+                📄 Doc Preview
+            </button>
+            <button class="gs-aux-tab @(StudioState.ActiveRightTab == "console" ? "active" : "")"
+                    @onclick='() => StudioState.ActiveRightTab = "console"'>
+                💻 Console (@ConsoleService.Logs.Count)
+            </button>
+            <button class="gs-aux-tab @(StudioState.ActiveRightTab == "mcp" ? "active" : "")"
+                    @onclick='() => StudioState.ActiveRightTab = "mcp"'>
+                🛠️ MCP (@McpManager.Servers.Count)
+            </button>
+            <button class="gs-aux-tab @(StudioState.ActiveRightTab == "telemetry" ? "active" : "")"
+                    @onclick='() => StudioState.ActiveRightTab = "telemetry"'>
+                📊 Telemetry
+            </button>
+        </nav>
+
+        <div class="gs-aux-body">
+            @if (StudioState.ActiveRightTab == "doc")
+            {
+                <!-- DOCUMENT PREVIEW WITH GLACIER.DOCTREE AST -->
+                <div class="gs-doc-header">
+                    <div>
+                        <div class="gs-doc-title">@DocPreviewService.ActiveDocument.Title</div>
+                        <div class="gs-doc-meta">
+                            <span>Words: @DocPreviewService.ActiveDocument.WordCount</span>
+                            <span>Tokens: ~@DocPreviewService.ActiveDocument.EstimatedTokens</span>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <!-- View mode toggler -->
+                        <div class="gs-view-toggle">
+                            <button class="gs-toggle-btn @(IsDocFormattedView ? "active" : "")" 
+                                    @onclick="() => IsDocFormattedView = true" 
+                                    title="Rich Formatted View">HTML</button>
+                            <button class="gs-toggle-btn @(!IsDocFormattedView ? "active" : "")" 
+                                    @onclick="() => IsDocFormattedView = false" 
+                                    title="Raw Markdown">RAW</button>
+                        </div>
+
+                        <select class="gs-select" style="width: 140px;" @onchange="OnWorkspaceFilePicked">
+                            <option value="">Load file...</option>
+                            @foreach (var file in DocPreviewService.GetWorkspaceAvailableFiles())
+                            {
+                                <option value="@file">@file</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <div class="gs-doc-layout">
+                    <!-- DocTree AST Outline with Click-To-Scroll Navigation -->
+                    <div class="gs-doc-outline">
+                        <div class="gs-outline-header">
+                            <span>DocTree AST Outline</span>
+                            <span class="gs-outline-badge">@DocPreviewService.ActiveDocument.Outline.Count</span>
+                        </div>
+                        @if (DocPreviewService.ActiveDocument.Outline.Count == 0)
+                        {
+                            <div style="font-size: 0.7rem; color: #64748b; padding: 6px;">No headings detected</div>
+                        }
+                        @foreach (var item in DocPreviewService.ActiveDocument.Outline)
+                        {
+                            <div class="gs-outline-item l@(item.Level) @(item.LineNumber == SelectedOutlineLine ? "selected" : "")"
+                                 @onclick="() => NavigateToHeading(item.LineNumber)">
+                                <span class="gs-outline-line-badge">L@(item.LineNumber)</span>
+                                <span class="gs-outline-icon">@(item.Level == 1 ? "📌" : (item.Level == 2 ? "▸" : "•"))</span>
+                                <span class="gs-outline-text" title="@item.Title">@item.Title</span>
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Document Viewer: Formatted or Raw -->
+                    <div class="gs-doc-viewer-container" id="docViewerContainer">
+                        @if (IsDocFormattedView)
+                        {
+                            <div class="gs-doc-viewer formatted">
+                                @((MarkupString)DocPreviewService.ActiveDocument.FormattedHtml)
+                            </div>
+                        }
+                        else
+                        {
+                            <pre class="gs-doc-viewer raw"><code>@DocPreviewService.ActiveDocument.RawContent</code></pre>
+                        }
+                    </div>
+                </div>
+            }
+            else if (StudioState.ActiveRightTab == "console")
+            {
+                <!-- LIVE INTERACTIVE CONSOLE WITH ANSI COLOR STYLING AND CWD TRACKING -->
+                <div class="gs-console-tab">
+                    <div class="gs-terminal-window" id="consoleLogWindow">
+                        @foreach (var log in ConsoleService.Logs)
+                        {
+                            <div class="gs-console-line">
+                                <span class="gs-console-time">[@log.Timestamp.ToString("HH:mm:ss")]</span>
+                                <span class="gs-console-src @log.Source.ToLowerInvariant()">[@log.Source]</span>
+                                <span class="gs-console-msg @(log.IsError ? "error" : "")">@((MarkupString)log.HtmlMessage)</span>
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Console Interactive Input Bar -->
+                    <div class="gs-console-input-bar">
+                        <div class="gs-quick-commands">
+                            <span class="gs-quick-cmd" @onclick='() => RunQuickCommand("git status")'>git status</span>
+                            <span class="gs-quick-cmd" @onclick='() => RunQuickCommand("git log -n 3 --oneline")'>git log</span>
+                            <span class="gs-quick-cmd" @onclick='() => RunQuickCommand("dotnet --version")'>dotnet version</span>
+                            <span class="gs-quick-cmd" @onclick='() => RunQuickCommand("dir")'>dir</span>
+                            <span class="gs-quick-cmd" @onclick='() => RunQuickCommand("cd ..")'>cd ..</span>
+                            <span class="gs-quick-cmd" @onclick="ClearConsole">clear</span>
+                        </div>
+
+                        <div class="gs-console-cmd-row">
+                            <span class="gs-prompt-prefix" title="@ConsoleService.CurrentWorkingDirectory">
+                                PS @Path.GetFileName(ConsoleService.CurrentWorkingDirectory)&gt;
+                            </span>
+                            <input class="gs-console-input" 
+                                   placeholder="Enter PowerShell command for user execution..." 
+                                   @bind="UserConsoleCommand"
+                                   @onkeydown="HandleConsoleKeyDown" />
+                            <button class="gs-console-btn" @onclick="ExecuteUserConsoleCommand">Run</button>
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (StudioState.ActiveRightTab == "mcp")
+            {
+                <!-- MCP SERVERS & TOOLS EXPLORER -->
+                <div class="gs-mcp-tab">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: #f1f5f9;">
+                        Model Context Protocol (MCP) Ecosystem
+                    </div>
+                    <p style="font-size: 0.75rem; color: #64748b;">
+                        Discovered from <code>~/.gemini/config/mcp_config.json</code> and in-process Glacier engines:
+                    </p>
+
+                    @foreach (var s in McpManager.Servers)
+                    {
+                        <div class="gs-mcp-card">
+                            <div class="gs-mcp-header">
+                                <span class="gs-mcp-name">@s.Name</span>
+                                <span class="gs-mcp-status">@s.StatusMessage</span>
+                            </div>
+                            <div class="gs-mcp-cmd">@s.Command @string.Join(" ", s.Args)</div>
+                            <div class="gs-mcp-tools-list">
+                                @foreach (var t in s.AvailableTools)
+                                {
+                                    <span class="gs-mcp-tool-pill">@t</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else if (StudioState.ActiveRightTab == "telemetry")
+            {
+                <!-- LIVE HARDWARE TELEMETRY VIA GLACIER.INFERENCE.HARDWARE.DEVICEMANAGER -->
+                <div class="gs-telemetry-tab">
+                    @{
+                        var devices = DeviceManager.GetDevices();
+                        var optimal = DeviceManager.GetOptimalDevice();
+                        double totalRamGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024.0 * 1024.0);
+                    }
+
+                    <div class="gs-stat-grid">
+                        <div class="gs-stat-card">
+                            <span class="gs-stat-title">Inference Speed</span>
+                            <span class="gs-stat-value">@StudioState.LastTokensPerSecond.ToString("F1")</span>
+                            <span class="gs-stat-unit">TOKENS / SEC</span>
+                        </div>
+                        <div class="gs-stat-card">
+                            <span class="gs-stat-title">Turn Latency</span>
+                            <span class="gs-stat-value">@StudioState.LastTurnDuration.TotalSeconds.ToString("F2")s</span>
+                            <span class="gs-stat-unit">END-TO-END</span>
+                        </div>
+                        <div class="gs-stat-card">
+                            <span class="gs-stat-title">Accelerators</span>
+                            <span class="gs-stat-value" style="color: #10b981;">@devices.Count</span>
+                            <span class="gs-stat-unit">DETECTED</span>
+                        </div>
+                        <div class="gs-stat-card">
+                            <span class="gs-stat-title">Host RAM</span>
+                            <span class="gs-stat-value" style="color: #38bdf8;">@totalRamGb.ToString("F0") GB</span>
+                            <span class="gs-stat-unit">PHYSICAL MEMORY</span>
+                        </div>
+                    </div>
+
+                    <!-- Physical Devices Enumerated via Win32/DXGI & DeviceManager -->
+                    <div class="gs-section-label" style="margin-top: 14px; margin-bottom: 6px;">
+                        Physical Compute Accelerators
+                    </div>
+
+                    @foreach (var dev in devices)
+                    {
+                        bool isOptimal = dev.Id == optimal.Id;
+                        <div class="gs-hw-device-card @(isOptimal ? "optimal" : "")">
+                            <div class="gs-hw-header">
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="gs-hw-icon">
+                                        @(dev.Vendor == GpuVendor.Nvidia ? "🟢" : dev.Vendor == GpuVendor.Amd ? "🔴" : dev.Vendor == GpuVendor.Intel ? "🔵" : "⚙️")
+                                    </span>
+                                    <div>
+                                        <div class="gs-hw-name">@dev.Name</div>
+                                        <div class="gs-hw-vendor">@dev.Vendor • Index @dev.Index • @(dev.IsDisplayDevice ? "Primary Display" : "Compute Device")</div>
+                                    </div>
+                                </div>
+                                @if (isOptimal)
+                                {
+                                    <span class="gs-hw-optimal-badge">⭐ Recommended</span>
+                                }
+                            </div>
+
+                            <div class="gs-hw-metrics">
+                                <div class="gs-hw-metric">
+                                    <span class="gs-hw-metric-label">Dedicated VRAM</span>
+                                    <span class="gs-hw-metric-val">@dev.DedicatedVramGb.ToString("F2") GB</span>
+                                </div>
+                                <div class="gs-hw-metric">
+                                    <span class="gs-hw-metric-label">Shared VRAM</span>
+                                    <span class="gs-hw-metric-val">@dev.SharedVramGb.ToString("F2") GB</span>
+                                </div>
+                                <div class="gs-hw-metric">
+                                    <span class="gs-hw-metric-label">Recommended Engine</span>
+                                    <span class="gs-hw-metric-val" style="color:#00e5ff;">@dev.RecommendedEngine</span>
+                                </div>
+                            </div>
+
+                            <div class="gs-hw-engines">
+                                <span class="gs-hw-engines-label">Supported:</span>
+                                @foreach (var engine in dev.SupportedEngines)
+                                {
+                                    <span class="gs-hw-engine-pill">@engine</span>
+                                }
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(dev.SafetyNotes))
+                            {
+                                <div class="gs-hw-notes">ℹ️ @dev.SafetyNotes</div>
+                            }
+                        </div>
+                    }
+
+                    <!-- Host CPU Architecture & Intrinsics -->
+                    <div class="gs-mcp-card" style="margin-top: 14px;">
+                        <div class="gs-mcp-header">
+                            <span class="gs-mcp-name">Host CPU Architecture & SIMD Hardware Intrinsics</span>
+                            <span class="gs-mcp-status">Active</span>
+                        </div>
+                        <ul style="font-size: 0.74rem; color: #94a3b8; padding-left: 20px; line-height: 1.8;">
+                            <li><strong>Logical Cores</strong>: @Environment.ProcessorCount threads</li>
+                            <li><strong>Architecture</strong>: @RuntimeInformation.ProcessArchitecture (Pure C# .NET 10 Native AOT)</li>
+                            <li><strong>SIMD Vectors</strong>: Vector512 (@(Vector512.IsHardwareAccelerated ? "Supported" : "Software")), Vector256 (@(Vector256.IsHardwareAccelerated ? "Supported" : "Software"))</li>
+                            <li><strong>Active Parser</strong>: Glacier.DocTree zero-copy Span parser</li>
+                            <li><strong>Active Storage</strong>: Glacier.Polaris Columnar Arrow IPC memory model</li>
+                        </ul>
+                    </div>
+                </div>
+            }
+        </div>
+    </aside>
+</div>
+
+@code {
+    private string CurrentInput { get; set; } = "";
+    private string UserConsoleCommand { get; set; } = "";
+    private string ExportNotification { get; set; } = "";
+    private bool IsDocFormattedView { get; set; } = true;
+    private int SelectedOutlineLine { get; set; } = 1;
+    private HashSet<string> _expandedThinkingMessages = new();
+
+    protected override void OnInitialized()
+    {
+        StudioState.OnStateChanged += HandleStateChanged;
+        ConsoleService.OnLogAdded += HandleStateChanged;
+        DocPreviewService.OnDocumentChanged += HandleStateChanged;
+    }
+
+    private void HandleStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        StudioState.OnStateChanged -= HandleStateChanged;
+        ConsoleService.OnLogAdded -= HandleStateChanged;
+        DocPreviewService.OnDocumentChanged -= HandleStateChanged;
+    }
+
+    private void CreateNewChat()
+    {
+        StudioState.CreateNewSession();
+    }
+
+    private void SelectSession(string id)
+    {
+        StudioState.SwitchSession(id);
+    }
+
+    private void DeleteSession(string id)
+    {
+        StudioState.DeleteSession(id);
+    }
+
+    private void OnProviderChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<ModelServerProvider>(e.Value?.ToString(), out var provider))
+        {
+            StudioState.SetProvider(provider);
+        }
+    }
+
+    private void OnModelPresetSelected(ChangeEventArgs e)
+    {
+        string? preset = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(preset))
+        {
+            StudioState.SelectedModel = preset;
+            StudioState.ActiveSession.ModelSnapshot = StudioState.GetModelDisplayName();
+            StudioState.SaveActiveSession();
+            StudioState.NotifyStateChanged();
+        }
+    }
+
+    private void ExportSession(string format)
+    {
+        try
+        {
+            string path = StudioState.ExportActiveSessionToDisk(format);
+            ConsoleService.AddLog("SYSTEM", $"Exported active session to: {path}");
+            ExportNotification = $"Session exported successfully to '{Path.GetFileName(path)}'";
+        }
+        catch (Exception ex)
+        {
+            ConsoleService.AddLog("SYSTEM", $"Export failed: {ex.Message}", isError: true);
+            ExportNotification = $"Export failed: {ex.Message}";
+        }
+    }
+
+    private void SetInput(string val)
+    {
+        CurrentInput = val;
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await SendMessageAsync();
+        }
+    }
+
+    private async Task SendMessageAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CurrentInput)) return;
+
+        string prompt = CurrentInput;
+        CurrentInput = "";
+        await AgentEngine.ProcessUserMessageAsync(prompt);
+        StudioState.SaveActiveSession();
+    }
+
+    private void CancelExecution()
+    {
+        AgentEngine.CancelCurrentExecution();
+    }
+
+    private (string CleanContent, string ThoughtContent) ExtractThinking(ChatMessage msg)
+    {
+        string thought = msg.ThinkingContent ?? "";
+        string content = msg.Content ?? "";
+
+        // Check if content itself contains <think> ... </think> tags
+        if (content.Contains("<think>", StringComparison.OrdinalIgnoreCase))
+        {
+            int start = content.IndexOf("<think>", StringComparison.OrdinalIgnoreCase);
+            int end = content.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+
+            if (end > start)
+            {
+                string tagThought = content.Substring(start + 7, end - (start + 7)).Trim();
+                if (string.IsNullOrEmpty(thought))
+                {
+                    thought = tagThought;
+                }
+                content = (content.Substring(0, start) + content.Substring(end + 8)).Trim();
+            }
+            else if (StudioState.ExecutionStatus == AgentExecutionStatus.Thinking)
+            {
+                // Unclosed think tag during live generation
+                string partialThought = content.Substring(start + 7).Trim();
+                if (string.IsNullOrEmpty(thought))
+                {
+                    thought = partialThought;
+                }
+                content = content.Substring(0, start).Trim();
+            }
+        }
+
+        return (content, thought);
+    }
+
+    private void ToggleThinking(ChatMessage msg)
+    {
+        if (_expandedThinkingMessages.Contains(msg.Id))
+            _expandedThinkingMessages.Remove(msg.Id);
+        else
+            _expandedThinkingMessages.Add(msg.Id);
+    }
+
+    private bool IsThinkingExpanded(ChatMessage msg)
+    {
+        // Open by default if currently thinking this turn
+        if (StudioState.ExecutionStatus == AgentExecutionStatus.Thinking &&
+            msg == StudioState.ActiveSession.Messages.LastOrDefault())
+        {
+            return true;
+        }
+
+        return _expandedThinkingMessages.Contains(msg.Id);
+    }
+
+    private void OnWorkspaceFilePicked(ChangeEventArgs e)
+    {
+        string? picked = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(picked))
+        {
+            DocPreviewService.LoadFile(picked);
+        }
+    }
+
+    private async Task NavigateToHeading(int lineNumber)
+    {
+        SelectedOutlineLine = lineNumber;
+        try
+        {
+            await JS.InvokeVoidAsync("eval", $"document.getElementById('heading-line-{lineNumber}')?.scrollIntoView({{ behavior: 'smooth', block: 'start' }})");
+        }
+        catch { }
+    }
+
+    private async Task HandleConsoleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await ExecuteUserConsoleCommand();
+        }
+    }
+
+    private async Task ExecuteUserConsoleCommand()
+    {
+        if (string.IsNullOrWhiteSpace(UserConsoleCommand)) return;
+        string cmd = UserConsoleCommand;
+        UserConsoleCommand = "";
+        await ConsoleService.ExecuteCommandAsync(cmd, "USER");
+    }
+
+    private async Task RunQuickCommand(string cmd)
+    {
+        await ConsoleService.ExecuteCommandAsync(cmd, "USER");
+    }
+
+    private void ClearConsole()
+    {
+        ConsoleService.ClearLogs();
+    }
+}

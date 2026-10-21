@@ -14,6 +14,8 @@
 [![Ecosystem](https://img.shields.io/badge/Glacier-Ecosystem-blue)](https://github.com/ian-cowley)
 [![Zero Python](https://img.shields.io/badge/Python%20Dependencies-0-success.svg)](https://github.com/ian-cowley)
 [![Zero Native DLLs](https://img.shields.io/badge/Native%20C%2B%2B%20DLLs-0-success.svg)](https://github.com/ian-cowley)
+[![Website](https://img.shields.io/badge/Website-glaciersoftware.dev-66fcf1.svg)](https://glaciersoftware.dev/)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange.svg?logo=buy-me-a-coffee)](https://buymeacoffee.com/glaciersoftware)
 
 </div>
 
@@ -89,3 +91,13 @@ Developed by **Ian Cowley** and **Antigravity (Google DeepMind)**.
 ## 📄 License
 MIT License. High-Performance Pure C# .NET 10 Ecosystem.
 
+---
+
+## ❄️ Glacier Ecosystem & Support
+
+Part of the **[Glacier Ecosystem](https://glaciersoftware.dev/)** — high-performance, zero-allocation developer tooling and data engines natively built for modern C# and .NET 10.
+
+* 🌐 **Website & Documentation**: [glaciersoftware.dev](https://glaciersoftware.dev/)
+* ☕ **Buy Me a Coffee**: [buymeacoffee.com/glaciersoftware](https://buymeacoffee.com/glaciersoftware)
+* ❤️ **GitHub Sponsors**: [github.com/sponsors/ian-cowley](https://github.com/sponsors/ian-cowley)
+* 🐙 **All Repositories**: [github.com/ian-cowley](https://github.com/ian-cowley)
