@@ -21,14 +21,6 @@ builder.Services.AddSingleton<Glacier.Showcase.Services.MissionControlService>()
 builder.Services.AddScoped<Glacier.Showcase.Services.AgentOrchestratorState>();
 builder.Services.AddScoped<Glacier.Showcase.Services.AgentService>();
 
-// Glacier Studio (Antigravity 2) Ecosystem Services
-builder.Services.AddSingleton<Glacier.Showcase.Services.GlacierStudio.GlacierConsoleService>();
-builder.Services.AddSingleton<Glacier.Showcase.Services.GlacierStudio.GlacierMcpManager>();
-builder.Services.AddScoped<Glacier.Showcase.Services.GlacierStudio.GlacierStudioState>();
-builder.Services.AddScoped<Glacier.Showcase.Services.GlacierStudio.GlacierDocTreePreviewService>();
-builder.Services.AddHttpClient<Glacier.Showcase.Services.GlacierStudio.GlacierAgentEngine>();
-builder.Services.AddScoped<Glacier.Showcase.Services.GlacierStudio.GlacierAgentEngine>();
-
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
