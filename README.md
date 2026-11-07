@@ -6,11 +6,10 @@
 
 ### 🚀 **< 15ms** Cold Start &nbsp;|&nbsp; ⚡ **16.0s / Step** Fine-Tuning (32 tok/s) &nbsp;|&nbsp; 🧠 **87.5%** Less VRAM &nbsp;|&nbsp; 💎 **100% Pure C# .NET 10**
 
-**Interactive real-time visual cockpit for the world-leading Glacier high-performance AI ecosystem.**
+**Interactive real-time visual cockpit for the Glacier high-performance AI & data ecosystem.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
-[![Native AOT](https://img.shields.io/badge/Native%20AOT-Ready-brightgreen.svg)](https://learn.microsoft.com/dotnet/core/deploying/native-aot/)
 [![Ecosystem](https://img.shields.io/badge/Glacier-Ecosystem-blue)](https://github.com/ian-cowley)
 [![Zero Python](https://img.shields.io/badge/Python%20Dependencies-0-success.svg)](https://github.com/ian-cowley)
 [![Zero Native DLLs](https://img.shields.io/badge/Native%20C%2B%2B%20DLLs-0-success.svg)](https://github.com/ian-cowley)
@@ -24,11 +23,16 @@
 ## ⚡ Launch Mission Control in One Command
 
 ```bash
-dotnet run --project Glacier.Showcase
+dotnet run --project Glacier.Showcase.csproj
 ```
 Then navigate to **`http://localhost:5000/mission-control`** in your browser.
 
-> 📖 **Deep Technical Architecture & Blueprints**: Explore [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for comprehensive sequence diagrams, hardware routing maps, and memory virtualization deep dives.
+### Optional Environment Variables
+- `GLACIER_MODELS_DIR`: Directory containing `.gguf` foundation models for live inference in Mission Control (also checks `~/.glacier/models` and `./models`).
+- `GEMINI_API_KEY`: Required only if running the live Gemini-backed Multi-Agent Investment Advisor workflow on `/`.
+- `GLACIER_LISTINGS_CSV`: Custom path to `London_listings.csv` for the Investment Advisor workflow (defaults to `./Data/London_listings.csv`).
+
+> 📖 **Deep Technical Architecture & Blueprints**: Explore [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for sequence diagrams, hardware routing maps, and memory virtualization deep dives.
 
 ---
 
@@ -39,46 +43,27 @@ All screens below are captured directly from the live `Glacier.Showcase` Blazor 
 | Mission Control Real-Time Cockpit | Ecosystem Architecture & Engine Cockpit |
 | :---: | :---: |
 | ![Mission Control](docs/images/showcase_mission_control.png) | ![Home Architecture Cockpit](docs/images/showcase_home_cockpit.png) |
-| *Real-time telemetry gauges, PagedAttention memory maps, and 3D graph exploration* | *Interactive multi-engine routing matrix across CPU AVX-512 and GPU hardware* |
+| *Real-time telemetry gauges, PagedAttention memory maps, and CSR graph exploration* | *Interactive multi-engine routing matrix across CPU AVX-512 and GPU hardware* |
 
 ---
 
 ## 🎯 The Five Mission Control Visual Cockpits
 
-| Visual Cockpit | Ecosystem Engine | Headline Capability & Benchmark |
+| Visual Cockpit | Ecosystem Engine | Capability & Telemetry |
 | :--- | :--- | :--- |
-| **⚡ Speedometer** | `Glacier.Inference` | **0–120 tokens/sec** animated needle gauge with real-time streaming prompt generation across NVIDIA SASS, AMD DirectML & CPU AVX-512. |
-| **📉 Loss Monitor** | `Glacier.StatsViz` / `Glacier.Tune` | **15.98s / step (32.0 tok/s)** on RTX 4060 GPU (**2.63x faster** than baseline, 100% loss parity). Live step-by-step $L_{CE}$ loss curve. |
-| **🕸️ 3D Knowledge Graph** | `Glacier.Graph` | **< 1ms multi-hop traversal** on Forward Star CSR zero-allocation graph canvas with interactive neighborhood discovery. |
-| **🔥 Vector Heatmap** | `Glacier.Vector` | **85 GB/s DDR5 streaming bandwidth** with SIMD AVX-512 cosine similarity heatmap matrix and zero GC pressure. |
-| **🧠 PagedAttention Pool** | `Glacier.Serve` | **87.5% VRAM savings** via 16-token virtual page slots with continuous batching and zero memory fragmentation. |
+| **⚡ Speedometer** | `Glacier.Inference` | Live autoregressive token generation gauge across NVIDIA Bare-Metal SASS, DirectML & CPU AVX-512 (fails fast with clear diagnostics if `.gguf` weights are not present locally). |
+| **📉 Loss Monitor** | `Glacier.Tune` | Empirical RTX 4060 LoRA fine-tuning telemetry (`21.8704 -> 10.9248` cross-entropy loss curve) plus live `StreamTelemetryStep` ingestion. |
+| **🕸️ Knowledge Graph** | `Glacier.Graph` | Sub-millisecond multi-hop traversal on Forward Star CSR zero-allocation graph storage with interactive 1-hop neighborhood inspection. |
+| **🔥 Vector Heatmap** | `Glacier.Vector` | Live 384-dimensional cosine similarity matrix indexed and queried through `Glacier.Vector`. |
+| **🧠 PagedAttention Pool** | `Glacier.Serve` | Live 64-block `PagedBlockPool` & `BlockTable` virtual KV cache allocation conserving 87.5% VRAM with zero fragmentation. |
 
 ---
 
-## 📊 Live Scorecard: Pure .NET 10 vs Python
+## 🆕 What's New in v1.1.0
 
-| Metric | Python (PyTorch + Unsloth) | Glacier Pure C# .NET 10 | Advantage |
-| :--- | :--- | :--- | :--- |
-| **7B LoRA Training Step (512 tok)** | 41.97s (Unoptimized baseline) | **15.98s (32 tok/s)** | 🏆 **2.63x Faster (26s saved/step)** |
-| **Cold Start Latency** | 1,400 ms (Python runtime imports) | **16.0 ms** | 🏆 **87x Faster** |
-| **KV Cache Memory Footprint** | Static pre-allocation (4,096 tok) | PagedAttention (16-tok pages) | 🏆 **87.5% Less VRAM** |
-| **HTTP Throughput** | ~800 req/sec (FastAPI / vLLM) | **16,000+ req/sec** | 🏆 **20x Throughput** |
-| **External Dependencies** | CUDA Toolkit, Python, C++ DLLs | **Zero (Pure C# .NET 10)** | 🏆 **Zero Dependency Hell** |
-
----
-
-## 🖥️ Supported Architecture Matrix
-
-- **Foundation Models**: Meta Llama 3/3.1/3.2/3.3, Microsoft Phi-4/Phi-3, DeepSeek-V2/V3/R1, Mistral/Devstral, Alibaba Qwen 2/2.5.
-- **Hardware Acceleration**: NVIDIA GeForce RTX 40/30 series (Bare-Metal SASS), AMD Radeon 890M / RDNA3 (DirectML / HIP), Host CPUs (SIMD AVX-512 & AVX2).
-
----
-
-## 🆕 What's New in v1.0.1
-
-- **Authentic DXGI/Win32 hardware discovery** — replaces the previous seeded `Random` stub with real DirectX 12 device enumeration via `IDXGIFactory6`.
-- **Real-time GPU telemetry from DirectX 12 device enumeration** — actual adapter VRAM, vendor, and feature level reported from the hardware.
-- **Full test suite authored from scratch** — **12 tests** covering hardware discovery, telemetry, and showcase pipeline correctness.
+- **100% Genuine Inference & Vector Telemetry** — removed simulated `Task.Delay` token streaming and procedural similarity formulas; live inference executes directly against `Glacier.Inference` GGUF sessions and fails fast with clear diagnostics when model weights are absent, while the heatmap queries `Glacier.Vector` directly.
+- **Dynamic Hardware & Model Discovery** — automatically discovers `.gguf` models across `GLACIER_MODELS_DIR`, `~/.glacier/models`, and `./models`, and dynamically reports DXGI/CUDA/SIMD capabilities on `/gpu`.
+- **Upgraded Glacier .NET 10 Stack & Strict Build Hygiene** — upgraded all 15 Glacier ecosystem packages to their latest remediated releases with `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` and zero NuGet vulnerabilities.
 
 ---
 

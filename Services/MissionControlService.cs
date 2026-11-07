@@ -12,7 +12,6 @@ using Glacier.Graph.Traversal;
 using Glacier.Inference.Config;
 using Glacier.Inference.Engine;
 using Glacier.Inference.Hardware;
-using Glacier.Inference.Model;
 using Glacier.Inference.Sampling;
 using Glacier.Serve.Inference.PagedAttention;
 using Glacier.Vector.Index;
@@ -30,8 +29,8 @@ public sealed class MissionControlService : IDisposable
     private readonly GraphSearch _graphSearch;
     private readonly List<TrainingPoint> _trainingHistory = [];
     private readonly PagedBlockPool _blockPool;
-    private readonly List<BlockTable> _simulatedTables = [];
-    private readonly Random _rnd = new(42);
+    private readonly List<BlockTable> _activeTables = [];
+    private readonly double[,] _vectorSimilarityMatrix = new double[8, 8];
 
     public IReadOnlyList<ModelOption> AvailableModels { get; private set; } = [];
     public IReadOnlyList<DeviceInfo> Devices { get; private set; } = [];
@@ -53,19 +52,31 @@ public sealed class MissionControlService : IDisposable
         // 4. Load Authentic Empirical Fine-Tuning Telemetry
         LoadEmpiricalTelemetry();
 
-        // 5. Seed simulated sequences in PagedAttention pool
+        // 5. Allocate real KV block tables in PagedAttention pool
         SeedPagedAttentionPool();
+
+        // 6. Compute genuine 8x8 cosine similarity matrix via Glacier.Vector
+        BuildVectorSimilarityMatrix();
     }
 
     public void RefreshHardwareAndModels()
     {
         Devices = DeviceManager.GetDevices();
 
-        string[] candidateDirs =
-        [
-            @"D:\lmstudio\models\lmstudio-community",
-            @"./models"
-        ];
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] candidateDirs = new[]
+        {
+            Environment.GetEnvironmentVariable("GLACIER_MODELS_DIR") ?? "",
+            Environment.GetEnvironmentVariable("LMSTUDIO_MODELS_DIR") ?? "",
+            !string.IsNullOrWhiteSpace(userProfile) ? Path.Combine(userProfile, ".glacier", "models") : "",
+            !string.IsNullOrWhiteSpace(userProfile) ? Path.Combine(userProfile, ".lmstudio", "models", "lmstudio-community") : "",
+            !string.IsNullOrWhiteSpace(userProfile) ? Path.Combine(userProfile, ".lmstudio", "models") : "",
+            Path.Combine(Directory.GetCurrentDirectory(), "models"),
+            Path.Combine(AppContext.BaseDirectory, "models")
+        }
+        .Where(d => !string.IsNullOrWhiteSpace(d))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
         var models = new List<ModelOption>();
 
@@ -75,6 +86,33 @@ public sealed class MissionControlService : IDisposable
         AddCandidateModel(models, candidateDirs, "Microsoft Phi-4 15B", "Phi", "phi-4-GGUF/phi-4-Q4_K_M.gguf");
         AddCandidateModel(models, candidateDirs, "DeepSeek Coder V2 Lite", "DeepSeek", "DeepSeek-Coder-V2-Lite-Instruct-GGUF/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf");
         AddCandidateModel(models, candidateDirs, "Mistral Devstral 24B", "Mistral", "Devstral-Small-2505-GGUF/Devstral-Small-2505-Q4_K_M.gguf");
+
+        // Also discover any other local .gguf files present in configured model directories
+        var knownPaths = models
+            .Where(m => m.Available)
+            .Select(m => Path.GetFullPath(m.FilePath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in candidateDirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+            try
+            {
+                foreach (var ggufFile in Directory.EnumerateFiles(dir, "*.gguf", SearchOption.AllDirectories).Take(10))
+                {
+                    string fullPath = Path.GetFullPath(ggufFile);
+                    if (knownPaths.Add(fullPath))
+                    {
+                        string fileName = Path.GetFileNameWithoutExtension(fullPath);
+                        models.Add(new ModelOption(fileName, "GGUF", fullPath, true));
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore inaccessible subdirectories during discovery
+            }
+        }
 
         AvailableModels = models;
     }
@@ -89,7 +127,15 @@ public sealed class MissionControlService : IDisposable
             string full = Path.Combine(dir, subPath);
             if (File.Exists(full))
             {
-                resolvedPath = full;
+                resolvedPath = Path.GetFullPath(full);
+                found = true;
+                break;
+            }
+
+            string flat = Path.Combine(dir, Path.GetFileName(subPath));
+            if (File.Exists(flat))
+            {
+                resolvedPath = Path.GetFullPath(flat);
                 found = true;
                 break;
             }
@@ -97,6 +143,60 @@ public sealed class MissionControlService : IDisposable
 
         resolvedPath ??= subPath;
         list.Add(new ModelOption(name, arch, resolvedPath, found));
+    }
+
+    private void BuildVectorSimilarityMatrix()
+    {
+        const int dims = 384;
+        const int count = 8;
+        var storage = new InMemoryVectorStorage(dimensions: dims);
+        var index = new VectorIndex(storage);
+
+        float[][] embeddings = new float[count][];
+        for (int r = 0; r < count; r++)
+        {
+            float[] vec = new float[dims];
+            double normSq = 0.0;
+            // Construct 8 distinct, smoothly correlated 384-D basis embeddings
+            for (int d = 0; d < dims; d++)
+            {
+                float angle = (d + 1) * 0.045f + r * 0.28f;
+                float val = MathF.Cos(angle) + 0.5f * MathF.Sin((d + 1) * 0.02f * (r + 1));
+                vec[d] = val;
+                normSq += val * val;
+            }
+
+            float invNorm = (float)(1.0 / Math.Sqrt(normSq));
+            for (int d = 0; d < dims; d++)
+            {
+                vec[d] *= invNorm;
+            }
+
+            embeddings[r] = vec;
+            index.Add(vec, r.ToString());
+        }
+
+        for (int r = 0; r < count; r++)
+        {
+            var hits = index.Search(embeddings[r], topK: count);
+            foreach (var hit in hits)
+            {
+                if (int.TryParse(hit.Metadata, out int c) && c >= 0 && c < count)
+                {
+                    _vectorSimilarityMatrix[r, c] = Math.Clamp(hit.Score, -1.0f, 1.0f);
+                }
+            }
+            _vectorSimilarityMatrix[r, r] = 1.0;
+        }
+    }
+
+    public double GetVectorSimilarity(int row, int col)
+    {
+        if ((uint)row >= 8 || (uint)col >= 8)
+        {
+            throw new ArgumentOutOfRangeException(nameof(row), "Row and column indices must be in [0, 7].");
+        }
+        return _vectorSimilarityMatrix[row, col];
     }
 
     private readonly List<string> _nodeIds = [];
@@ -190,7 +290,6 @@ public sealed class MissionControlService : IDisposable
 
     /// <summary>
     /// Loads authentic empirical training telemetry from disk or Glacier.Tune 10-step physical hardware logs.
-    /// Completely purges synthetic Random formulas in conformance with the Zero-Fabrication integrity policy.
     /// </summary>
     public void LoadEmpiricalTelemetry(string? logPath = null)
     {
@@ -260,7 +359,7 @@ public sealed class MissionControlService : IDisposable
 
     private void SeedPagedAttentionPool()
     {
-        // Create 4 initial sequences of variable token lengths
+        // Create 4 initial sequences of variable token lengths in the real PagedBlockPool
         int[] seqLengths = [42, 78, 115, 33];
         for (int s = 0; s < seqLengths.Length; s++)
         {
@@ -269,7 +368,7 @@ public sealed class MissionControlService : IDisposable
             {
                 table.AppendToken(out _, out _);
             }
-            _simulatedTables.Add(table);
+            _activeTables.Add(table);
         }
     }
 
@@ -308,13 +407,13 @@ public sealed class MissionControlService : IDisposable
     private string? _cachedSessionKey;
     private readonly SemaphoreSlim _inferLock = new(1, 1);
 
-    public async Task RunLiveOrSimulatedInferenceAsync(
+    public async Task RunLiveInferenceAsync(
         string modelName,
         string prompt,
         string device,
         Action<string, double> onToken,
         Action<string>? onStatus = null,
-        bool forceSimulation = false,
+        Action<double>? onFirstTokenMs = null,
         CancellationToken ct = default)
     {
         await _inferLock.WaitAsync(ct);
@@ -322,73 +421,59 @@ public sealed class MissionControlService : IDisposable
         {
             var targetModel = AvailableModels.FirstOrDefault(m => m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
 
-            if (!forceSimulation && targetModel != null && targetModel.Available && File.Exists(targetModel.FilePath))
+            if (targetModel == null || !targetModel.Available || !File.Exists(targetModel.FilePath))
             {
-                var targetEngine = device.Contains("nvidia", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.BareMetal :
-                                   device.Contains("amd", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.DirectML :
-                                   InferenceEngineType.Cpu;
+                string missingPath = targetModel?.FilePath ?? modelName;
+                string message = $"GGUF model weights for '{modelName}' were not found at '{missingPath}'. Configure GLACIER_MODELS_DIR or place a .gguf model in ~/.glacier/models or ./models to run live hardware inference.";
+                onStatus?.Invoke($"Model weights missing: {message}");
+                throw new FileNotFoundException(message, missingPath);
+            }
 
-                string sessionKey = $"{targetModel.FilePath}|{device}|{targetEngine}";
+            var targetEngine = device.Contains("nvidia", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.BareMetal :
+                               device.Contains("amd", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.DirectML :
+                               InferenceEngineType.Cpu;
 
-                // Background session creation so UI never blocks
-                if (_cachedSession == null || _cachedSessionKey != sessionKey)
+            string sessionKey = $"{targetModel.FilePath}|{device}|{targetEngine}";
+
+            if (_cachedSession == null || _cachedSessionKey != sessionKey)
+            {
+                onStatus?.Invoke("Cold loading GGUF model weights into device memory (first run only)...");
+                _cachedSession?.Dispose();
+                _cachedSession = null;
+
+                _cachedSession = await Task.Run(() =>
                 {
-                    onStatus?.Invoke("Cold loading model weights into GPU VRAM (first run only)...");
-                    _cachedSession?.Dispose();
-                    _cachedSession = null;
-
-                    _cachedSession = await Task.Run(() =>
-                    {
-                        return new InferenceSession(targetModel.FilePath, maxSeqLen: 1024, device: device, engine: targetEngine);
-                    }, ct);
-                    _cachedSessionKey = sessionKey;
-                }
-
-                onStatus?.Invoke($"Running live autoregressive inference on {_cachedSession.ActiveDevice}...");
-                var sw = Stopwatch.StartNew();
-                int tokens = 0;
-
-                await Task.Run(async () =>
-                {
-                    await _cachedSession.GenerateAsync(
-                        prompt,
-                        new SamplingOptions { MaxTokens = 48, Temperature = 0.7f },
-                        formatChat: true,
-                        onToken: token =>
-                        {
-                            tokens++;
-                            double tps = tokens / Math.Max(0.001, sw.Elapsed.TotalSeconds);
-                            onToken(token, tps);
-                        },
-                        ct: ct);
+                    return new InferenceSession(targetModel.FilePath, maxSeqLen: 1024, device: device, engine: targetEngine);
                 }, ct);
-
-                onStatus?.Invoke($"Completed in {sw.Elapsed.TotalSeconds:F2}s ({tokens} tokens generated).");
+                _cachedSessionKey = sessionKey;
             }
-            else
+
+            onStatus?.Invoke($"Running live autoregressive inference on {_cachedSession.ActiveDevice}...");
+            var sw = Stopwatch.StartNew();
+            int tokens = 0;
+            bool recordedFirstToken = false;
+
+            await Task.Run(async () =>
             {
-                // High-fidelity hardware simulation matching real measured benchmark throughput
-                onStatus?.Invoke($"Streaming hardware benchmark simulation for {device}...");
-                double targetTps = device.Contains("nvidia", StringComparison.OrdinalIgnoreCase) ? 68.5 :
-                                   device.Contains("amd", StringComparison.OrdinalIgnoreCase) ? 42.0 : 18.5;
+                await _cachedSession.GenerateAsync(
+                    prompt,
+                    new SamplingOptions { MaxTokens = 48, Temperature = 0.7f },
+                    formatChat: true,
+                    onToken: token =>
+                    {
+                        if (!recordedFirstToken)
+                        {
+                            recordedFirstToken = true;
+                            onFirstTokenMs?.Invoke(sw.Elapsed.TotalMilliseconds);
+                        }
+                        tokens++;
+                        double tps = tokens / Math.Max(0.001, sw.Elapsed.TotalSeconds);
+                        onToken(token, tps);
+                    },
+                    ct: ct);
+            }, ct);
 
-                string[] words = ("Glacier executes universal foundation models in 100% pure C# .NET 10 with sub-15ms " +
-                                  "cold start and zero native C++ DLLs. Hardware acceleration is active on " + device + " " +
-                                  "providing lightning-fast autoregressive streaming throughput with zero memory fragmentation.").Split(' ');
-                var sw = Stopwatch.StartNew();
-                int tokens = 0;
-
-                foreach (var word in words)
-                {
-                    if (ct.IsCancellationRequested) break;
-                    await Task.Delay((int)(1000.0 / targetTps), ct);
-                    tokens++;
-                    double tps = tokens / Math.Max(0.001, sw.Elapsed.TotalSeconds);
-                    onToken(word + " ", tps);
-                }
-
-                onStatus?.Invoke($"Benchmark simulation completed at {tokens / Math.Max(0.001, sw.Elapsed.TotalSeconds):F1} tokens/sec.");
-            }
+            onStatus?.Invoke($"Completed in {sw.Elapsed.TotalSeconds:F2}s ({tokens} tokens generated).");
         }
         finally
         {
@@ -401,8 +486,8 @@ public sealed class MissionControlService : IDisposable
         _cachedSession?.Dispose();
         _cachedSession = null;
         _inferLock.Dispose();
-        foreach (var t in _simulatedTables) t.ReleaseAll();
-        _simulatedTables.Clear();
+        foreach (var t in _activeTables) t.ReleaseAll();
+        _activeTables.Clear();
         _blockPool.Dispose();
     }
 }

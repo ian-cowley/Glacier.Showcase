@@ -61,7 +61,7 @@ public class TelemetryAgent : LlmAgent
         return Task.CompletedTask;
     }
 
-    private string SerializeContents(List<LlmContent> contents)
+    private static string SerializeContents(List<LlmContent> contents)
     {
         try
         {
@@ -108,16 +108,16 @@ public class FilterPropertiesTool : ITool
             double maxPrice = args.GetProperty("maxPrice").GetDouble();
             int minReviews = args.GetProperty("minReviews").GetInt32();
             string neighborhood = args.TryGetProperty("neighborhood", out var nProp) ? nProp.GetString() ?? "" : "";
-            
+
             _state.SetExecutionPhase("Filtering");
             var matches = await _dataService.FilterPropertiesAsync(maxPrice, minReviews, neighborhood);
             _state.FilteredProperties = matches;
-            
+
             return $"Successfully filtered properties using Glacier.Polaris. Found {matches.Count} candidate properties.";
         }
-        catch (Exception ex) 
-        { 
-            return $"Error during filtration: {ex.Message}"; 
+        catch (Exception ex)
+        {
+            return $"Error during filtration: {ex.Message}";
         }
     }
 }
@@ -156,7 +156,7 @@ public class SemanticSearchTool : ITool
             string neighborhood = args.TryGetProperty("neighborhood", out var nProp) ? nProp.GetString() ?? "" : "";
 
             _state.SetExecutionPhase("Vibe Search");
-            
+
             List<PropertyMatch> candidates;
             if (!string.IsNullOrEmpty(neighborhood))
             {
@@ -164,23 +164,23 @@ public class SemanticSearchTool : ITool
             }
             else
             {
-                candidates = _state.FilteredProperties.Count > 0 
-                    ? _state.FilteredProperties 
-                    : await _dataService.GetPropertiesInNeighborhoodAsync("Westminster"); // fallback
+                candidates = _state.FilteredProperties.Count > 0
+                    ? _state.FilteredProperties
+                    : await _dataService.GetPropertiesInNeighborhoodAsync("Westminster");
             }
 
             var finalMatches = await _dataService.SemanticSearchAsync(candidates, vibe);
             _state.FinalMatches = finalMatches;
-            
+
             var summary = $"Vector search complete! Found {finalMatches.Count} matches matching the vibe '{vibe}'.\n";
-            foreach (var m in finalMatches.Take(3)) 
+            foreach (var m in finalMatches.Take(3))
                 summary += $"- {m.Name} in {m.Neighbourhood} (Price: ${m.Price}, Vibe Score: {m.VibeMatchScore:F2})\n";
-            
+
             return summary;
         }
-        catch (Exception ex) 
-        { 
-            return $"Error during semantic search: {ex.Message}"; 
+        catch (Exception ex)
+        {
+            return $"Error during semantic search: {ex.Message}";
         }
     }
 }
@@ -209,7 +209,7 @@ public class AuditNeighborhoodTool : ITool
         }")!;
     }
 
-    public async Task<string> ExecuteAsync(string arguments)
+    public Task<string> ExecuteAsync(string arguments)
     {
         try
         {
@@ -224,11 +224,11 @@ public class AuditNeighborhoodTool : ITool
             _state.ActiveTransitRoute = route;
 
             var resultObj = new { Profile = profile, Route = route };
-            return JsonSerializer.Serialize(resultObj, new JsonSerializerOptions { WriteIndented = true });
+            return Task.FromResult(JsonSerializer.Serialize(resultObj, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (Exception ex) 
-        { 
-            return $"Error auditing neighborhood: {ex.Message}"; 
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error auditing neighborhood: {ex.Message}");
         }
     }
 }
@@ -257,33 +257,33 @@ public class GenerateReportTool : ITool
         }")!;
     }
 
-    public async Task<string> ExecuteAsync(string arguments)
+    public Task<string> ExecuteAsync(string arguments)
     {
         try
         {
             var args = JsonDocument.Parse(arguments).RootElement;
             string rationale = args.GetProperty("rationale").GetString() ?? "";
 
-            if (_state.FinalMatches.Count == 0) 
+            if (_state.FinalMatches.Count == 0)
             {
-                return "Error: No final matches. You must call SemanticSearch first.";
+                return Task.FromResult("Error: No final matches. You must call SemanticSearch first.");
             }
-            
+
             _state.SetExecutionPhase("Designing Prospectus");
             string pdfUrl = _pdfService.GenerateInvestmentProspectus(
-                _state.FinalMatches, 
-                rationale, 
-                _state.ActiveTransitRoute, 
+                _state.FinalMatches,
+                rationale,
+                _state.ActiveTransitRoute,
                 _state.ActiveNeighborhoodProfile,
                 _state.UnderwrittenProperties.Count > 0 ? _state.UnderwrittenProperties : null
             );
             _state.ProspectusPdfPath = pdfUrl;
-            
-            return $"SUCCESS: PDF Prospectus generated successfully. Direct Link: {pdfUrl}";
+
+            return Task.FromResult($"SUCCESS: PDF Prospectus generated successfully. Direct Link: {pdfUrl}");
         }
-        catch (Exception ex) 
-        { 
-            return $"Error generating report: {ex.Message}"; 
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error generating report: {ex.Message}");
         }
     }
 }
@@ -315,7 +315,7 @@ public class UnderwritePropertiesTool : ITool
             _state.UnderwrittenProperties.Clear();
 
             int hops = _state.ActiveTransitRoute?.Hops ?? 2;
-            
+
             // Underwrite top 3 collated property matches
             foreach (var prop in _state.FinalMatches.Take(3))
             {
@@ -324,12 +324,12 @@ public class UnderwritePropertiesTool : ITool
                 double grossRevenue = price * 365.0 * occupancyRate;
                 double operatingExpenses = grossRevenue * 0.35 + 3000.0;
                 double netIncome = grossRevenue - operatingExpenses;
-                
+
                 // Estimate property purchase value (Westminster multiplier is higher, baseline 2800)
                 double multiplier = prop.Neighbourhood.Contains("Westminster", StringComparison.OrdinalIgnoreCase) ? 3200.0 : 2600.0;
                 double estValue = Math.Max(150000.0, price * multiplier);
                 double yield = netIncome / estValue;
-                
+
                 // Cash invested: 30% of valuation (25% downpayment + 5% fees)
                 double cashInvested = estValue * 0.30;
                 // Annual Interest Payment (75% LTV at 5.5% interest)
@@ -371,19 +371,17 @@ public class UnderwritePropertiesTool : ITool
 public class DelegateTool : ITool
 {
     private readonly TelemetryAgent _specialistAgent;
-    private readonly ILlmService _llmService;
-    private readonly string _specialistName;
+    private readonly ILlmService? _llmService;
     private readonly string _description;
     private readonly JsonNode _schema;
 
-    public DelegateTool(string name, string description, TelemetryAgent specialistAgent, ILlmService llmService, string schemaJson)
+    public DelegateTool(string name, string description, TelemetryAgent specialistAgent, ILlmService? llmService, string schemaJson)
     {
         Name = name;
         _description = description;
         _specialistAgent = specialistAgent;
         _llmService = llmService;
         _schema = JsonNode.Parse(schemaJson)!;
-        _specialistName = specialistAgent.Name;
     }
 
     public string Name { get; }
@@ -392,6 +390,11 @@ public class DelegateTool : ITool
 
     public async Task<string> ExecuteAsync(string arguments)
     {
+        if (_llmService == null)
+        {
+            throw new InvalidOperationException("GEMINI_API_KEY environment variable is required to invoke specialist agents.");
+        }
+
         // Synthesize an instructional prompt containing the arguments for the specialist
         var prompt = $"Task Assignment: Execute your specialty task with parameters: {arguments}. Run your tool and return the exact text results.";
         var result = await _specialistAgent.RunAsync(prompt, _llmService);
@@ -401,8 +404,8 @@ public class DelegateTool : ITool
 
 public class AgentService
 {
-    private readonly ILlmService _llmService;
-    
+    private readonly ILlmService? _llmService;
+
     // Core Agents
     public TelemetryAgent AcquisitionManager { get; }
     public TelemetryAgent PolarisAnalyst { get; }
@@ -414,15 +417,15 @@ public class AgentService
     public AgentOrchestratorState State { get; }
 
     public AgentService(
-        AirbnbDataService dataService, 
+        AirbnbDataService dataService,
         NeighborhoodAssessmentService assessmentService,
-        PdfReportService pdfService, 
+        PdfReportService pdfService,
         AgentOrchestratorState state,
         IConfiguration config)
     {
         State = state;
         string apiKey = config["GEMINI_API_KEY"] ?? config["GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
-        _llmService = !string.IsNullOrEmpty(apiKey) ? new GeminiService(apiKey) : null!;
+        _llmService = !string.IsNullOrWhiteSpace(apiKey) ? new GeminiService(apiKey) : null;
 
         // Instantiate Specialist Agents
         PolarisAnalyst = new TelemetryAgent(
@@ -559,6 +562,11 @@ IMPORTANT: Do not skip steps. Do not hallucinate links or data. Always call the 
 
         try
         {
+            if (_llmService == null)
+            {
+                throw new InvalidOperationException("GEMINI_API_KEY environment variable is required to run the multi-agent investment workflow.");
+            }
+
             // 1. Parameter Extraction
             var extractionRequest = new LlmRequest
             {
@@ -576,19 +584,19 @@ Return a JSON object with:
 Return ONLY the raw JSON object, no markdown, no other text.")
                 }
             };
-            
+
             State.AddStepLog("Acquisition Manager", "Parameter Extraction", "Extracting parameters from prompt using LLM...");
             State.SetActiveAgent("Acquisition Manager");
             var extractionResponse = await _llmService.GenerateContentAsync(extractionRequest);
             var jsonText = extractionResponse.Content?.Trim() ?? "{}";
-            
+
             // Clean up markdown code blocks if the LLM wrapped it in ```json
             if (jsonText.StartsWith("```"))
             {
                 var lines = jsonText.Split('\n');
                 jsonText = string.Join("\n", lines.Where(l => !l.Trim().StartsWith("```")));
             }
-            
+
             double maxPrice = 150;
             int minReviews = 10;
             string vibe = "cozy";
@@ -618,9 +626,8 @@ Return ONLY the raw JSON object, no markdown, no other text.")
 
             // 3. Phase 2 — Vector Specialist + Risk Auditor run in parallel now that Polaris has populated FilteredProperties
             State.SetExecutionPhase("Parallel Search");
-            // Derive the neighborhood to audit from the Polaris results (or fallback to user-provided)
-            string targetNeighborhood = neighborhood 
-                ?? State.FilteredProperties.FirstOrDefault()?.Neighbourhood 
+            string targetNeighborhood = neighborhood
+                ?? State.FilteredProperties.FirstOrDefault()?.Neighbourhood
                 ?? "Westminster";
 
             var vectorPrompt = $"Task Assignment: Execute your specialty task with parameters: {{\"vibe\": \"{vibe}\", \"neighborhood\": \"{targetNeighborhood}\"}}. Run your tool and return the exact text results.";
@@ -631,7 +638,7 @@ Return ONLY the raw JSON object, no markdown, no other text.")
             var riskTask   = Task.Run(() => RiskAuditor.RunAsync(riskPrompt, _llmService));
             await Task.WhenAll(vectorTask, riskTask);
 
-            // 3. Collate Results
+            // 4. Collate Results
             State.SetExecutionPhase("Collating Results");
             State.AddStepLog("Acquisition Manager", "Collation", "Collating data filters and semantic vibe matches...");
 
@@ -643,7 +650,7 @@ Return ONLY the raw JSON object, no markdown, no other text.")
             if (collatedMatches.Count == 0)
             {
                 State.AddStepLog("Acquisition Manager", "Collation Warning", "Strict intersection of filters and vibe matches was empty. Merging lists.");
-                collatedMatches = State.FinalMatches; // Fallback
+                collatedMatches = State.FinalMatches;
             }
             else
             {
@@ -651,11 +658,11 @@ Return ONLY the raw JSON object, no markdown, no other text.")
             }
             State.FinalMatches = collatedMatches;
             State.SetActiveAgent("Acquisition Manager");
-            State.AddStepLog("Acquisition Manager", "Collation Complete", $"Results collated. Dispatching to Financial Underwriter.");
+            State.AddStepLog("Acquisition Manager", "Collation Complete", "Results collated. Dispatching to Financial Underwriter.");
 
-            // 4. Financial Underwriting
+            // 5. Financial Underwriting
             State.SetExecutionPhase("Underwriting Projections");
-            var underwritePrompt = $"Task Assignment: Execute the UnderwriteProperties tool to underwrite the top collated properties. Run your tool and return the exact text results.";
+            var underwritePrompt = "Task Assignment: Execute the UnderwriteProperties tool to underwrite the top collated properties. Run your tool and return the exact text results.";
             await FinancialUnderwriter.RunAsync(underwritePrompt, _llmService);
 
             var underwritingSummary = State.UnderwrittenProperties.Count > 0
@@ -663,9 +670,9 @@ Return ONLY the raw JSON object, no markdown, no other text.")
                     $"- {uw.PropertyName}: Est. Value £{uw.EstimatedValue:N0} | Occupancy {(uw.OccupancyRate * 100):F0}% | Gross Revenue £{uw.GrossAnnualRevenue:N0}/yr | Net Income £{uw.NetAnnualIncome:N0}/yr | Cap Rate {(uw.RentalYield * 100):F1}% | Cash-on-Cash {(uw.CashOnCashReturn * 100):F1}%"))
                 : "No underwriting data available.";
 
-            // 5. Acquisition Manager Final Synthesis and Report Design
+            // 6. Acquisition Manager Final Synthesis and Report Design
             State.SetExecutionPhase("Designing Prospectus");
-            
+
             var coordinatorPrompt = $@"Your specialist agents have completed their tasks and provided the following data:
 
 1. Data Filtration (Polaris Analyst): Found {State.FilteredProperties.Count} properties under ${maxPrice} with at least {minReviews} reviews.
@@ -682,11 +689,11 @@ Your task as Acquisition Manager:
 
             var result = await AcquisitionManager.RunAsync(coordinatorPrompt, _llmService);
             State.SetExecutionPhase("Finished");
-            
+
             // Persist run details to disk
             var logPath = State.PersistRunHistory();
             State.AddStepLog("System", "Finished", $"Run persisted successfully to {logPath}");
-            
+
             return result;
         }
         catch (Exception ex)

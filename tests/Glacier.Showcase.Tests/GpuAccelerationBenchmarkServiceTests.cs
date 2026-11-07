@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Glacier.Showcase.Services;
 using Xunit;
 
+[Trait("Category", "Hardware")]
 public class GpuAccelerationBenchmarkServiceTests
 {
     private readonly GpuAccelerationBenchmarkService _service = new();

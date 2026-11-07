@@ -3,10 +3,12 @@ namespace Glacier.Showcase.Tests;
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Glacier.Showcase.Services;
 using Glacier.Tune.Trainer;
 using Xunit;
 
+[Trait("Category", "Unit")]
 public class MissionControlServiceTests : IDisposable
 {
     private readonly MissionControlService _service;
@@ -122,5 +124,40 @@ public class MissionControlServiceTests : IDisposable
         Assert.Equal(10.1234f, lastPoint.Loss);
         Assert.Equal(0.95e-4f, lastPoint.LearningRate);
         Assert.Equal(48.2, lastPoint.TokensPerSec);
+    }
+
+    [Fact]
+    public void VectorSimilarityMatrix_ComputesAuthenticCosineSimilaritiesViaGlacierVector()
+    {
+        for (int r = 0; r < 8; r++)
+        {
+            Assert.Equal(1.0, _service.GetVectorSimilarity(r, r), precision: 4);
+            for (int c = 0; c < 8; c++)
+            {
+                double simRC = _service.GetVectorSimilarity(r, c);
+                double simCR = _service.GetVectorSimilarity(c, r);
+                Assert.InRange(simRC, -1.0, 1.0);
+                Assert.Equal(simRC, simCR, precision: 4);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunLiveInferenceAsync_MissingModelWeights_ThrowsFileNotFoundWithoutFabricatedTokens()
+    {
+        int emittedTokens = 0;
+        string? lastStatus = null;
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            _service.RunLiveInferenceAsync(
+                modelName: "NonExistentModel-99B-GGUF",
+                prompt: "Hello Glacier",
+                device: "cpu",
+                onToken: (_, _) => emittedTokens++,
+                onStatus: s => lastStatus = s));
+
+        Assert.Equal(0, emittedTokens);
+        Assert.NotNull(lastStatus);
+        Assert.Contains("missing", lastStatus, StringComparison.OrdinalIgnoreCase);
     }
 }

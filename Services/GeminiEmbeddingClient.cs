@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Glacier.Showcase.Services;
 
@@ -17,6 +16,11 @@ public class GeminiEmbeddingClient
 
     public async Task<float[]> GetEmbeddingAsync(string text)
     {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+        {
+            throw new InvalidOperationException("GEMINI_API_KEY environment variable is required for Gemini embeddings.");
+        }
+
         var request = new
         {
             model = "models/gemini-embedding-001",
@@ -33,12 +37,12 @@ public class GeminiEmbeddingClient
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync();
-            throw new Exception($"Gemini API Error (EmbedContent): {response.StatusCode}\nDetails: {errorBody}");
+            throw new InvalidOperationException($"Gemini API Error (EmbedContent): {response.StatusCode}\nDetails: {errorBody}");
         }
 
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
         var values = json.GetProperty("embedding").GetProperty("values").EnumerateArray();
-        
+
         return values.Select(v => v.GetSingle()).ToArray();
     }
 }

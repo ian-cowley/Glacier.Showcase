@@ -1,5 +1,6 @@
 @page "/gpu"
 @using Glacier.Showcase.Services
+@using System.Runtime.Intrinsics
 @inject GpuAccelerationBenchmarkService BenchmarkService
 @rendermode InteractiveServer
 
@@ -12,36 +13,31 @@
             <div class="d-flex align-items-center justify-content-between flex-wrap">
                 <div>
                     <h2 class="fw-bold mb-1" style="color: #48cae4;">
-                        <i class="bi bi-cpu-fill me-2"></i>Glacier Bare-Metal GPU Acceleration
+                        <i class="bi bi-cpu-fill me-2"></i>Glacier Bare-Metal GPU &amp; SIMD Acceleration
                     </h2>
                     <p class="mb-0 text-light opacity-75">
-                        Direct P/Invoke driver execution across NVIDIA RTX 4060 (Ada Lovelace), AMD Radeon 890M (RDNA 3.5), and Zen 5 AVX-512.
+                        Direct P/Invoke driver and hardware intrinsic execution across NVIDIA CUDA/SASS, Direct3D 12 / DirectML, and CPU AVX-512 / AVX2.
                     </p>
                 </div>
                 <div class="mt-3 mt-md-0">
-                    <span class="badge bg-success px-3 py-2 fs-6 shadow-sm">
-                        <i class="bi bi-shield-check me-1"></i> Zero-SDK Bare-Metal Drivers Active
+                    <span class="badge @(BenchmarkService.IsGpuAvailable ? "bg-success" : "bg-info text-dark") px-3 py-2 fs-6 shadow-sm">
+                        <i class="bi bi-shield-check me-1"></i>
+                        @(BenchmarkService.IsGpuAvailable ? "Zero-SDK Bare-Metal GPU Active" : "SIMD Vectorized CPU Engine Active")
                     </span>
                 </div>
             </div>
             <hr style="border-color: rgba(255,255,255,0.15);" />
             <div class="row g-3 text-center">
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <div class="p-2 rounded" style="background: rgba(255,255,255,0.05);">
-                        <small class="text-uppercase tracking-wider opacity-75">Active dGPU</small>
-                        <div class="fw-bold text-info">NVIDIA GeForce RTX 4060 (sm_89)</div>
+                        <small class="text-uppercase tracking-wider opacity-75">Detected Compute Target</small>
+                        <div class="fw-bold text-info">@BenchmarkService.DetectedHardware</div>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <div class="p-2 rounded" style="background: rgba(255,255,255,0.05);">
-                        <small class="text-uppercase tracking-wider opacity-75">Active APU</small>
-                        <div class="fw-bold text-warning">AMD Radeon 890M Graphics (RDNA 3.5)</div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="p-2 rounded" style="background: rgba(255,255,255,0.05);">
-                        <small class="text-uppercase tracking-wider opacity-75">Active CPU SIMD</small>
-                        <div class="fw-bold text-success">AMD Ryzen AI 9 HX 370 (Zen 5 AVX-512)</div>
+                        <small class="text-uppercase tracking-wider opacity-75">Host CPU Vector Intrinsics</small>
+                        <div class="fw-bold text-success">@GetSimdProfile()</div>
                     </div>
                 </div>
             </div>
@@ -51,20 +47,20 @@
     <!-- Action Bar -->
     <div class="d-flex align-items-center justify-content-between mb-4">
         <div>
-            <h4 class="fw-bold mb-0 text-dark">Ecosystem GPU Performance Verification</h4>
-            <small class="text-muted">Benchmarks all 6 core compute pillars on bare-metal hardware simultaneously.</small>
+            <h4 class="fw-bold mb-0 text-dark">Ecosystem GPU &amp; Accelerator Performance Verification</h4>
+            <small class="text-muted">Benchmarks all 6 core compute pillars on physical hardware with numerical parity verification.</small>
         </div>
         <div>
             <button class="btn btn-primary btn-lg shadow px-4" @onclick="RunBenchmarks" disabled="@IsRunning">
                 @if (IsRunning)
                 {
                     <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                    <span>Benchmarking GPU Cores...</span>
+                    <span>Benchmarking Compute Cores...</span>
                 }
                 else
                 {
                     <i class="bi bi-lightning-charge-fill me-2"></i>
-                    <span>Execute All GPU Benchmarks</span>
+                    <span>Execute All Benchmarks</span>
                 }
             </button>
         </div>
@@ -77,7 +73,7 @@
             <div class="col-md-3">
                 <div class="card shadow-sm border-0 border-start border-primary border-4 p-3 bg-white rounded-3">
                     <small class="text-muted text-uppercase fw-semibold">Pillars Verified</small>
-                    <h3 class="fw-bold text-primary mb-0">@Results.Count / 6</h3>
+                    <h3 class="fw-bold text-primary mb-0">@Results.Count(r => r.Verified) / @Results.Count</h3>
                 </div>
             </div>
             <div class="col-md-3">
@@ -95,7 +91,9 @@
             <div class="col-md-3">
                 <div class="card shadow-sm border-0 border-start border-warning border-4 p-3 bg-white rounded-3">
                     <small class="text-muted text-uppercase fw-semibold">Numerical Parity</small>
-                    <h3 class="fw-bold text-success mb-0">100% Bit-Accurate</h3>
+                    <h3 class="fw-bold @(Results.All(r => r.Verified) ? "text-success" : "text-danger") mb-0">
+                        @(Results.All(r => r.Verified) ? "All Verified" : "Discrepancy")
+                    </h3>
                 </div>
             </div>
         </div>
@@ -108,8 +106,8 @@
                             <th class="py-3 ps-3">Pillar / Repository</th>
                             <th class="py-3">Operation</th>
                             <th class="py-3">Workload Dataset</th>
-                            <th class="py-3 text-end">CPU (AVX-512)</th>
-                            <th class="py-3 text-end">GPU (Bare-Metal)</th>
+                            <th class="py-3 text-end">CPU Baseline</th>
+                            <th class="py-3 text-end">Auto Accelerator</th>
                             <th class="py-3 text-end">Speedup</th>
                             <th class="py-3 text-end">Throughput</th>
                             <th class="py-3 text-center pe-3">Parity Check</th>
@@ -159,9 +157,9 @@
     {
         <div class="card shadow-sm border-0 p-5 text-center bg-light rounded-3">
             <i class="bi bi-gpu-card text-muted" style="font-size: 3.5rem;"></i>
-            <h4 class="mt-3 fw-bold">Ready to Benchmark GPU Ecosystem</h4>
+            <h4 class="mt-3 fw-bold">Ready to Benchmark Compute Ecosystem</h4>
             <p class="text-muted" style="max-width: 600px; margin: 0 auto;">
-                Click <strong>"Execute All GPU Benchmarks"</strong> above to launch parallel GPU compute kernels across
+                Click <strong>"Execute All Benchmarks"</strong> above to run live compute kernels across
                 Glacier.Polaris, Glacier.ML, Glacier.Tensor, Glacier.Vector, Glacier.Plot, and Glacier.StatsViz.
             </p>
         </div>
@@ -171,6 +169,14 @@
 @code {
     private bool IsRunning = false;
     private List<BenchmarkResult>? Results;
+
+    private static string GetSimdProfile()
+    {
+        string width = Vector512.IsHardwareAccelerated ? "512-bit AVX-512" :
+                       Vector256.IsHardwareAccelerated ? "256-bit AVX2" :
+                       Vector128.IsHardwareAccelerated ? "128-bit SIMD" : "Scalar";
+        return $"{Environment.ProcessorCount} Logical Cores ({width})";
+    }
 
     private async Task RunBenchmarks()
     {

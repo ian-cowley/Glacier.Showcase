@@ -13,7 +13,7 @@
             <div class="pulse-indicator"></div>
             <div>
                 <h1 class="mc-title">GLACIER MISSION CONTROL</h1>
-                <p class="mc-subtitle">Real-Time Pure C# .NET 10 Hardware, Architecture & Training Telemetry</p>
+                <p class="mc-subtitle">Real-Time Pure C# .NET 10 Hardware, Architecture &amp; Training Telemetry</p>
             </div>
         </div>
         <div class="hud-badges">
@@ -48,7 +48,7 @@
             🕸️ 3D Knowledge Graph
         </button>
         <button class="mc-tab @(ActiveTab == "vector" ? "active" : "")" @onclick='() => SetTab("vector")'>
-            🔥 Vector Heatmap & Memory
+            🔥 Vector Heatmap &amp; Memory
         </button>
         <button class="mc-tab @(ActiveTab == "paged" ? "active" : "")" @onclick='() => SetTab("paged")'>
             🧠 PagedAttention Pool
@@ -66,7 +66,7 @@
                 <!-- Left: Gauge and Controls -->
                 <div class="glass-card gauge-panel">
                     <h3 class="panel-heading">Real-Time Autoregressive Speedometer</h3>
-                    
+
                     <div class="gauge-wrapper">
                         <svg class="gauge-svg" viewBox="0 0 300 170">
                             <!-- Background Arc -->
@@ -86,7 +86,7 @@
                                 </linearGradient>
                             </defs>
                         </svg>
-                        
+
                         <div class="gauge-digital">
                             <span class="digital-num">@CurrentTokensPerSec.ToString("F1")</span>
                             <span class="digital-unit">TOKENS / SEC</span>
@@ -100,7 +100,7 @@
                             <select @bind="SelectedModelName" class="mc-select" disabled="@IsGenerating">
                                 @foreach (var m in MissionControlSvc.AvailableModels)
                                 {
-                                    <option value="@m.Name">@m.Name (@m.Architecture)</option>
+                                    <option value="@m.Name">@m.Name (@m.Architecture) — @(m.Available ? "Ready" : "Weights Missing")</option>
                                 }
                             </select>
                         </div>
@@ -113,19 +113,12 @@
                                 }
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>Execution Mode</label>
-                            <select @bind="ExecutionMode" class="mc-select" disabled="@IsGenerating">
-                                <option value="Live">⚡ Live Hardware Execution (VRAM / SIMD)</option>
-                                <option value="Simulated">🚀 Instant Benchmark Telemetry (0s wait)</option>
-                            </select>
-                        </div>
                     </div>
 
                     <div class="prompt-input-row">
                         <input type="text" @bind="InferencePrompt" class="mc-input" placeholder="Enter prompt to benchmark live..." disabled="@IsGenerating" />
                         <button class="mc-btn-primary" @onclick="ExecuteInferencePromptAsync" disabled="@IsGenerating">
-                            @(IsGenerating ? "⏳ Generating..." : "⚡ Run Inference")
+                            @(IsGenerating ? "⏳ Generating..." : "⚡ Run Live Inference")
                         </button>
                         @if (IsGenerating)
                         {
@@ -135,7 +128,7 @@
 
                     @if (!string.IsNullOrEmpty(StatusMessage))
                     {
-                        <div class="status-banner @(StatusMessage.Contains("Error") || StatusMessage.Contains("Failed") ? "error" : "active")">
+                        <div class="status-banner @(StatusMessage.Contains("Error") || StatusMessage.Contains("Failed") || StatusMessage.Contains("missing", StringComparison.OrdinalIgnoreCase) ? "error" : "active")">
                             <span class="status-indicator-dot"></span>
                             <span>@StatusMessage</span>
                         </div>
@@ -148,12 +141,12 @@
                     <div class="terminal-box">
                         <div class="terminal-header">
                             <span>SESSION: PURE C# .NET 10 | NO C++/PYTHON DLLS</span>
-                            <span class="status-dot">ACTIVE</span>
+                            <span class="status-dot">LIVE</span>
                         </div>
                         <div class="terminal-body">
                             @if (string.IsNullOrEmpty(StreamingText))
                             {
-                                <span class="placeholder-text">Click 'Run Inference' to test live autoregressive generation and watch the speedometer deflect in real-time...</span>
+                                <span class="placeholder-text">Place a .gguf model in GLACIER_MODELS_DIR, ~/.glacier/models, or ./models and click 'Run Live Inference' to measure real autoregressive token throughput...</span>
                             }
                             else
                             {
@@ -202,8 +195,8 @@
                 <!-- Loss Graph Visualizer -->
                 <div class="glass-card chart-panel">
                     <div class="panel-header-flex">
-                        <h3 class="panel-heading">Real-Time Training Cross-Entropy Loss Curve (Glacier.StatsViz)</h3>
-                        <button class="mc-btn-sm" @onclick="SimulateNewStep">➕ Step Forward</button>
+                        <h3 class="panel-heading">Empirical Training Cross-Entropy Loss Curve (Glacier.Tune)</h3>
+                        <button class="mc-btn-sm" @onclick="ReloadEmpiricalSteps">↻ Reset Empirical Log</button>
                     </div>
 
                     <div class="chart-wrapper">
@@ -215,10 +208,10 @@
                             <line x1="50" y1="210" x2="780" y2="210" stroke="#1f2d47" stroke-dasharray="4" />
 
                             <!-- Y-axis labels -->
-                            <text x="15" y="35" fill="#6c7d9e" font-size="12">4.0</text>
-                            <text x="15" y="95" fill="#6c7d9e" font-size="12">3.0</text>
-                            <text x="15" y="155" fill="#6c7d9e" font-size="12">2.0</text>
-                            <text x="15" y="215" fill="#6c7d9e" font-size="12">1.0</text>
+                            <text x="15" y="35" fill="#6c7d9e" font-size="12">24</text>
+                            <text x="15" y="95" fill="#6c7d9e" font-size="12">18</text>
+                            <text x="15" y="155" fill="#6c7d9e" font-size="12">12</text>
+                            <text x="15" y="215" fill="#6c7d9e" font-size="12">6</text>
 
                             <!-- Gradient Fill Area -->
                             <polygon points="@GetPolygonPoints()" fill="url(#lossGrad)" opacity="0.3" />
@@ -239,11 +232,11 @@
                     <div class="loss-metrics-row">
                         <div class="l-metric">
                             <span class="l-lbl">LATEST LOSS (L_CE)</span>
-                            <span class="l-val">@(MissionControlSvc.TrainingHistory.LastOrDefault()?.Loss.ToString("F4") ?? "0.3800")</span>
+                            <span class="l-val">@(MissionControlSvc.TrainingHistory.LastOrDefault()?.Loss.ToString("F4") ?? "10.9248")</span>
                         </div>
                         <div class="l-metric">
-                            <span class="l-lbl">TRAINING THROUGHPUT</span>
-                            <span class="l-val">52.4 tok/s</span>
+                            <span class="l-lbl">MEASURED THROUGHPUT</span>
+                            <span class="l-val">@((MissionControlSvc.TrainingHistory.LastOrDefault()?.TokensPerSec ?? 46.0).ToString("F1")) tok/s</span>
                         </div>
                         <div class="l-metric">
                             <span class="l-lbl">PARAMETER FOOTPRINT</span>
@@ -266,9 +259,9 @@
                         <p class="panel-sub">Zero-Allocation Native Array Traversal with Sub-Millisecond Multi-Hop Traversal</p>
                     </div>
                     <div class="graph-stats-chips">
-                        <span class="chip">18 Nodes</span>
-                        <span class="chip">24 Directed Edges</span>
-                        <span class="chip green">CSR Traversal: 0.7 ms</span>
+                        <span class="chip">@GraphNodes.Count Nodes</span>
+                        <span class="chip">@GraphEdges.Count Directed Edges</span>
+                        <span class="chip green">CSR Traversal Active</span>
                     </div>
                 </div>
 
@@ -313,7 +306,7 @@
             <div class="vector-grid">
                 <div class="glass-card heatmap-panel">
                     <h3 class="panel-heading">Dense SIMD Cosine Similarity Heatmap (Glacier.Vector)</h3>
-                    <p class="panel-sub">384-Dimensional Dense Vector Search Matrix across DDR5 Virtual Space</p>
+                    <p class="panel-sub">Live 384-Dimensional Cosine Similarity Matrix Indexed via Glacier.Vector</p>
 
                     <div class="heatmap-table-wrapper">
                         <table class="heatmap-table">
@@ -322,8 +315,8 @@
                                 <tr>
                                     @for (int c = 0; c < 8; c++)
                                     {
-                                        double sim = GetSimilarity(r, c);
-                                        <td class="heatmap-cell" style="background-color: @GetHeatmapColor(sim);" title="Similarity: @sim.ToString("F3")">
+                                        double sim = MissionControlSvc.GetVectorSimilarity(r, c);
+                                        <td class="heatmap-cell" style="background-color: @GetHeatmapColor(sim);" title="Cosine Similarity (@r, @c): @sim.ToString("F4")">
                                             @sim.ToString("F2")
                                         </td>
                                     }
@@ -334,10 +327,10 @@
                 </div>
 
                 <div class="glass-card mem-bandwidth-panel">
-                    <h3 class="panel-heading">Memory Bandwidth & Hardware Latency</h3>
+                    <h3 class="panel-heading">Memory Bandwidth &amp; Hardware Latency</h3>
                     <div class="bandwidth-meter">
-                        <div class="bm-val">85.4 GB/s</div>
-                        <div class="bm-lbl">DDR5 STREAMING BANDWIDTH</div>
+                        <div class="bm-val">384-D</div>
+                        <div class="bm-lbl">UNIT-NORMALIZED VECTOR INDEX</div>
                         <div class="bm-bar-wrap">
                             <div class="bm-bar-fill" style="width: 88%;"></div>
                         </div>
@@ -345,7 +338,7 @@
 
                     <div class="feature-bullets">
                         <div class="fb-item">✓ Zero GC Garbage Collection Pressure during indexing</div>
-                        <div class="fb-item">✓ AVX-512 FMA-accelerated dot product kernels</div>
+                        <div class="fb-item">✓ AVX-512 / AVX2 FMA-accelerated dot product kernels</div>
                         <div class="fb-item">✓ Sub-10ms End-to-End Hybrid RAG Context Assembly</div>
                     </div>
                 </div>
@@ -360,7 +353,7 @@
                         <p class="panel-sub">16-Token Non-Contiguous Block Table Architecture (Eliminates Memory Fragmentation)</p>
                     </div>
                     <div class="graph-stats-chips">
-                        <span class="chip green">87.5% VRAM Reduction</span>
+                        <span class="chip green">@PagedStats.MemoryReductionPct.ToString("F1")% VRAM Saved</span>
                         <span class="chip">0% Fragmentation</span>
                         <span class="chip cyan">64 Physical Blocks</span>
                     </div>
@@ -404,7 +397,7 @@
                     <div class="panel-header-flex">
                         <div>
                             <h3 class="panel-heading">Glacier Unified In-Process Architecture Blueprint</h3>
-                            <p class="panel-sub">Zero-Copy Memory-Mapped Storage, Bare-Metal Driver Execution & Native Virtualization</p>
+                            <p class="panel-sub">Zero-Copy Memory-Mapped Storage, Bare-Metal Driver Execution &amp; Native Virtualization</p>
                         </div>
                         <div class="graph-stats-chips">
                             <span class="chip cyan">100% Pure C# .NET 10</span>
@@ -416,7 +409,7 @@
                     <!-- Visual Flow Stack -->
                     <div class="arch-layer-stack">
                         <div class="arch-layer layer-4">
-                            <div class="layer-badge">LAYER 4: SERVING & APPLICATION</div>
+                            <div class="layer-badge">LAYER 4: SERVING &amp; APPLICATION</div>
                             <div class="layer-items">
                                 <div class="arch-box highlight">
                                     <span class="ab-title">⚡ Glacier.Showcase</span>
@@ -424,7 +417,7 @@
                                 </div>
                                 <div class="arch-box">
                                     <span class="ab-title">🌐 Glacier.Serve</span>
-                                    <span class="ab-desc">Continuous batching & PagedAttention HTTP (OpenAI / Ollama).</span>
+                                    <span class="ab-desc">Continuous batching &amp; PagedAttention HTTP (OpenAI / Ollama).</span>
                                 </div>
                                 <div class="arch-box">
                                     <span class="ab-title">💻 glacier CLI</span>
@@ -440,7 +433,7 @@
                         <div class="arch-connector">▼ IN-PROCESS UNIFIED MEMORY POINTERS (ZERO TCP SOCKETS) ▼</div>
 
                         <div class="arch-layer layer-3">
-                            <div class="layer-badge">LAYER 3: COMPUTE & AI CORE ENGINES</div>
+                            <div class="layer-badge">LAYER 3: COMPUTE &amp; AI CORE ENGINES</div>
                             <div class="layer-items">
                                 <div class="arch-box highlight">
                                     <span class="ab-title">🧠 Glacier.Inference</span>
@@ -448,7 +441,7 @@
                                 </div>
                                 <div class="arch-box">
                                     <span class="ab-title">⚡ Glacier.Tune</span>
-                                    <span class="ab-desc">PEFT LoRA/QLoRA autograd & zero-copy GGUF adapter fusion.</span>
+                                    <span class="ab-desc">PEFT LoRA/QLoRA autograd &amp; zero-copy GGUF adapter fusion.</span>
                                 </div>
                                 <div class="arch-box">
                                     <span class="ab-title">🔥 Glacier.Vector</span>
@@ -461,10 +454,10 @@
                             </div>
                         </div>
 
-                        <div class="arch-connector">▼ VIRTUAL MEMORY & ZERO-ALLOCATION BUFFERS ▼</div>
+                        <div class="arch-connector">▼ VIRTUAL MEMORY &amp; ZERO-ALLOCATION BUFFERS ▼</div>
 
                         <div class="arch-layer layer-2">
-                            <div class="layer-badge">LAYER 2: VIRTUAL MEMORY & KV PAGING</div>
+                            <div class="layer-badge">LAYER 2: VIRTUAL MEMORY &amp; KV PAGING</div>
                             <div class="layer-items">
                                 <div class="arch-box">
                                     <span class="ab-title">🧠 PagedBlockPool</span>
@@ -539,12 +532,12 @@
 @code {
     private string ActiveTab = "speedometer";
     private string SelectedModelName = "Qwen 2.5 7B Instruct";
-    private string SelectedDeviceName = "nvidia-rtx-4060";
+    private string SelectedDeviceName = "cpu";
     private string InferencePrompt = "What is the primary breakthrough of Glacier.Inference?";
     private string StreamingText = "";
     private double CurrentTokensPerSec = 0.0;
     private double PeakTokensPerSec = 0.0;
-    private double PrefillMs = 18.2;
+    private double PrefillMs = 0.0;
     private int GeneratedCount = 0;
     private bool IsGenerating = false;
 
@@ -556,6 +549,9 @@
     private List<PagedBlockDto> PagedBlocks = [];
     private (int AllocatedBlocks, int FreeBlocks, int CapacityTokens, double MemoryReductionPct) PagedStats;
 
+    private string StatusMessage = "";
+    private CancellationTokenSource? _currentCts;
+
     protected override void OnInitialized()
     {
         var graph = MissionControlSvc.GetGraphData();
@@ -565,9 +561,11 @@
         PagedBlocks = MissionControlSvc.GetPagedBlocks();
         PagedStats = MissionControlSvc.GetPagedPoolStats();
 
-        if (MissionControlSvc.AvailableModels.Count > 0)
+        var firstReadyModel = MissionControlSvc.AvailableModels.FirstOrDefault(m => m.Available)
+                              ?? MissionControlSvc.AvailableModels.FirstOrDefault();
+        if (firstReadyModel != null)
         {
-            SelectedModelName = MissionControlSvc.AvailableModels[0].Name;
+            SelectedModelName = firstReadyModel.Name;
         }
         if (MissionControlSvc.Devices.Count > 0)
         {
@@ -579,10 +577,6 @@
     {
         ActiveTab = tab;
     }
-
-    private string ExecutionMode = "Live";
-    private string StatusMessage = "";
-    private CancellationTokenSource? _currentCts;
 
     private void CancelInference()
     {
@@ -597,22 +591,17 @@
         GeneratedCount = 0;
         CurrentTokensPerSec = 0.0;
         PeakTokensPerSec = 0.0;
-        StatusMessage = ExecutionMode == "Live"
-            ? "Preparing hardware context and validating model weights..."
-            : "Initializing benchmark telemetry stream...";
+        PrefillMs = 0.0;
+        StatusMessage = "Preparing hardware context and validating GGUF model weights...";
         StateHasChanged();
         await Task.Yield();
 
         _currentCts?.Dispose();
         _currentCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
         try
         {
-            bool forceSim = ExecutionMode == "Simulated";
-
-            await MissionControlSvc.RunLiveOrSimulatedInferenceAsync(
+            await MissionControlSvc.RunLiveInferenceAsync(
                 SelectedModelName,
                 InferencePrompt,
                 SelectedDeviceName,
@@ -629,10 +618,12 @@
                     StatusMessage = status;
                     InvokeAsync(StateHasChanged);
                 },
-                forceSimulation: forceSim,
+                onFirstTokenMs: ms =>
+                {
+                    PrefillMs = ms;
+                    InvokeAsync(StateHasChanged);
+                },
                 ct: _currentCts.Token);
-
-            PrefillMs = Math.Max(14.2, sw.ElapsedMilliseconds * 0.12);
         }
         catch (OperationCanceledException)
         {
@@ -641,7 +632,7 @@
         catch (Exception ex)
         {
             StatusMessage = $"⚠️ Error: {ex.Message}";
-            StreamingText += $"\n\n[Diagnostic Feedback] {ex.Message}\nTip: You can select 'Instant Benchmark Telemetry' mode to evaluate peak throughput without initial cold load wait.";
+            StreamingText = $"[Diagnostic Feedback] {ex.Message}";
         }
         finally
         {
@@ -650,12 +641,9 @@
         }
     }
 
-    private void SimulateNewStep()
+    private void ReloadEmpiricalSteps()
     {
-        int nextStep = MissionControlSvc.TrainingHistory.Count + 1;
-        float prevLoss = MissionControlSvc.TrainingHistory.LastOrDefault()?.Loss ?? 0.38f;
-        float newLoss = Math.Max(0.18f, prevLoss - 0.005f);
-        MissionControlSvc.AddTrainingStep(new TrainingPoint(nextStep, newLoss, 1e-5f, 53.2));
+        MissionControlSvc.LoadEmpiricalTelemetry();
     }
 
     private string GetPolylinePoints()
@@ -667,8 +655,8 @@
         for (int i = 0; i < pts.Count; i++)
         {
             float x = 50 + ((float)i / Math.Max(1, pts.Count - 1)) * 720;
-            // Loss 0.0 to 4.0 mapped to y: 260 to 20
-            float y = 260 - (Math.Clamp(pts[i].Loss / 4.0f, 0.0f, 1.0f) * 230);
+            // Loss 0.0 to 24.0 mapped to y: 260 to 20
+            float y = 260 - (Math.Clamp(pts[i].Loss / 24.0f, 0.0f, 1.0f) * 230);
             sb.Append($"{x:F1},{y:F1} ");
         }
         return sb.ToString().Trim();
@@ -684,7 +672,6 @@
     private (int X, int Y) GetNodePosition(string id)
     {
         int idx = Math.Abs(id.GetHashCode()) % 1000;
-        // Deterministic layout in a radial/grid constellation
         int row = (idx % 4);
         int col = ((idx / 4) % 6);
         int x = 100 + (col * 140) + ((row % 2) * 30);
@@ -692,7 +679,7 @@
         return (x, y);
     }
 
-    private string GetNodeColor(string cat) => cat switch
+    private static string GetNodeColor(string cat) => cat switch
     {
         "ENGINE" => "#00ffff",
         "MODEL" => "#00ff88",
@@ -706,14 +693,7 @@
         SelectedNeighborhood = MissionControlSvc.GetNeighborhood(id, 1);
     }
 
-    private double GetSimilarity(int r, int c)
-    {
-        if (r == c) return 1.0;
-        int diff = Math.Abs(r - c);
-        return Math.Max(0.12, 1.0 - (diff * 0.14) + ((r * 7 + c * 3) % 10) * 0.01);
-    }
-
-    private string GetHeatmapColor(double sim)
+    private static string GetHeatmapColor(double sim)
     {
         if (sim > 0.85) return "rgba(0, 255, 204, 0.85)";
         if (sim > 0.65) return "rgba(0, 200, 255, 0.65)";
@@ -1220,7 +1200,6 @@
     50% { transform: scale(1.4); opacity: 0.4; }
 }
 
-
 /* Architecture Tab Styles */
 .architecture-grid {
     display: flex;
@@ -1323,5 +1302,4 @@
     line-height: 1.5;
     margin-bottom: 0.75rem;
 }
-
 </style>

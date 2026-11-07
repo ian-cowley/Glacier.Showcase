@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using Glacier.Serve.Inference.PagedAttention;
 using Xunit;
 
+[Trait("Category", "Unit")]
 public class PagedAttentionTests
 {
     [Fact]

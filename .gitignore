@@ -2,21 +2,25 @@
 [Bb]in/
 [Oo]bj/
 [Rr]elease/
+[Tt]est[Rr]esults/
+publish/
 
 # IDE and editor folders
 .vs/
 .idea/
 .vscode/
 
-# User-specific files
+# User-specific & secret files
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
 *.DotSettings.user
 *.DotSettings
-appsettings.json
-appsettings.*.json
+appsettings*.json
+!appsettings.template.json
+*.env*
+.env*
 
 # AI assistant artifacts
 .gemini/
@@ -26,7 +30,14 @@ BenchmarkDotNet.Artifacts/
 
 # NuGet
 *.nupkg
+*.snupkg
 packages/
+nuget.config
+
+# Generated runtime data & reports
+wwwroot/reports/
+wwwroot/doctree_db/
+wwwroot/graph_db/
 
 # Logs
 *.log

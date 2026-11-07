@@ -1,9 +1,8 @@
-using System.Text.Json;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Glacier.Polaris;
 using Glacier.Vector.Index;
 using Glacier.Vector.Storage;
-using Glacier.Showcase.Services;
 
 namespace Glacier.Showcase.Services;
 
@@ -23,16 +22,53 @@ public class AirbnbDataService
 {
     private readonly GeminiEmbeddingClient _embeddingClient;
     private readonly string _londonCsvPath;
-    
+
     // Vector Search
     private VectorIndex? _vectorIndex;
     private readonly ConcurrentDictionary<string, float[]> _embeddingCache = new();
-    
+
     public AirbnbDataService(GeminiEmbeddingClient embeddingClient)
     {
         _embeddingClient = embeddingClient;
-        // The path to the CSV file is two levels up from the executing assembly, inside Data
-        _londonCsvPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Data", "London_listings.csv");
+        _londonCsvPath = ResolveListingsCsvPath();
+    }
+
+    private static string ResolveListingsCsvPath()
+    {
+        string? envPath = Environment.GetEnvironmentVariable("GLACIER_LISTINGS_CSV");
+        if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
+        {
+            return envPath;
+        }
+
+        string[] candidates =
+        [
+            Path.Combine(Directory.GetCurrentDirectory(), "Data", "London_listings.csv"),
+            Path.Combine(Directory.GetCurrentDirectory(), "..", "Data", "London_listings.csv"),
+            Path.Combine(AppContext.BaseDirectory, "Data", "London_listings.csv"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Data", "London_listings.csv")
+        ];
+
+        foreach (var candidate in candidates)
+        {
+            string fullPath = Path.GetFullPath(candidate);
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        return Path.GetFullPath(candidates[0]);
+    }
+
+    private void EnsureCsvExists()
+    {
+        if (!File.Exists(_londonCsvPath))
+        {
+            throw new FileNotFoundException(
+                $"London listings dataset was not found at '{_londonCsvPath}'. Set GLACIER_LISTINGS_CSV or place London_listings.csv in ./Data/.",
+                _londonCsvPath);
+        }
     }
 
     /// <summary>
@@ -40,9 +76,11 @@ public class AirbnbDataService
     /// </summary>
     public async Task<List<PropertyMatch>> FilterPropertiesAsync(double maxPrice, int minReviews, string? neighborhood = null, int limit = 100)
     {
+        EnsureCsvExists();
+
         // 1. Scan the CSV using Polaris LazyFrame
         var lf = DataFrame.ScanCsv(_londonCsvPath);
-        
+
         // 2. Build the Expression pipeline
         var priceExpr = Expr.Col("price").Str().ReplaceAll("$", "").Str().ReplaceAll(",", "").Cast(typeof(double)).Alias("parsed_price");
         var reviewsExpr = Expr.Col("number_of_reviews").Cast(typeof(long)).Alias("parsed_reviews");
@@ -61,11 +99,11 @@ public class AirbnbDataService
         filteredLf = filteredLf
             .Filter(filterExpr)
             .Select(
-                Expr.Col("id"), 
-                Expr.Col("name"), 
-                Expr.Col("description"), 
-                Expr.Col("neighbourhood_cleansed"), 
-                Expr.Col("parsed_price").Alias("price"), 
+                Expr.Col("id"),
+                Expr.Col("name"),
+                Expr.Col("description"),
+                Expr.Col("neighbourhood_cleansed"),
+                Expr.Col("parsed_price").Alias("price"),
                 Expr.Col("parsed_score").Alias("review_scores_rating"),
                 Expr.Col("parsed_reviews").Alias("number_of_reviews")
             )
@@ -80,8 +118,10 @@ public class AirbnbDataService
     /// </summary>
     public async Task<List<PropertyMatch>> GetPropertiesInNeighborhoodAsync(string neighborhood, int limit = 100)
     {
+        EnsureCsvExists();
+
         var lf = DataFrame.ScanCsv(_londonCsvPath);
-        
+
         var priceExpr = Expr.Col("price").Str().ReplaceAll("$", "").Str().ReplaceAll(",", "").Cast(typeof(double)).Alias("parsed_price");
         var reviewsExpr = Expr.Col("number_of_reviews").Cast(typeof(long)).Alias("parsed_reviews");
         var scoreExpr = Expr.Col("review_scores_rating").Cast(typeof(double)).Alias("parsed_score");
@@ -90,11 +130,11 @@ public class AirbnbDataService
             .WithColumns(priceExpr, reviewsExpr, scoreExpr)
             .Filter(Expr.Col("neighbourhood_cleansed").Str().Contains(neighborhood))
             .Select(
-                Expr.Col("id"), 
-                Expr.Col("name"), 
-                Expr.Col("description"), 
-                Expr.Col("neighbourhood_cleansed"), 
-                Expr.Col("parsed_price").Alias("price"), 
+                Expr.Col("id"),
+                Expr.Col("name"),
+                Expr.Col("description"),
+                Expr.Col("neighbourhood_cleansed"),
+                Expr.Col("parsed_price").Alias("price"),
                 Expr.Col("parsed_score").Alias("review_scores_rating"),
                 Expr.Col("parsed_reviews").Alias("number_of_reviews")
             )
@@ -115,7 +155,7 @@ public class AirbnbDataService
         _vectorIndex = new VectorIndex(storage);
 
         // 2. Generate embeddings in parallel with rate limiting
-        var semaphore = new SemaphoreSlim(5); // Process 5 at a time to be safe with rate limits
+        using var semaphore = new SemaphoreSlim(5); // Process 5 at a time to be safe with rate limits
         var tasks = candidateProperties.Select(async prop =>
         {
             await semaphore.WaitAsync();
@@ -129,9 +169,9 @@ public class AirbnbDataService
                     embedding = await _embeddingClient.GetEmbeddingAsync(textToEmbed);
                     _embeddingCache[textToEmbed] = embedding;
                 }
-                
+
                 var metadata = JsonSerializer.Serialize(prop);
-                lock (storage) // InMemoryVectorStorage Add is likely not thread-safe
+                lock (storage) // InMemoryVectorStorage Add is not thread-safe
                 {
                     _vectorIndex.Add(embedding, metadata);
                 }
@@ -184,13 +224,13 @@ public class AirbnbDataService
         {
             matches.Add(new PropertyMatch
             {
-                Id           = idCol.Get(i)?.ToString() ?? "",
-                Name         = nameCol.Get(i)?.ToString() ?? "",
-                Description  = descCol.Get(i)?.ToString() ?? "",
+                Id            = idCol.Get(i)?.ToString() ?? "",
+                Name          = nameCol.Get(i)?.ToString() ?? "",
+                Description   = descCol.Get(i)?.ToString() ?? "",
                 Neighbourhood = neighCol.Get(i)?.ToString() ?? "",
-                Price        = priceCol.Get(i) is double p ? p : 0.0,
-                ReviewScore  = scoreCol.Get(i) is double s ? s : 0.0,
-                ReviewsCount = revCol.Get(i) is long r ? (int)r : 0
+                Price         = priceCol.Get(i) is double p ? p : 0.0,
+                ReviewScore   = scoreCol.Get(i) is double s ? s : 0.0,
+                ReviewsCount  = revCol.Get(i) is long r ? (int)r : 0
             });
         }
         return matches;
