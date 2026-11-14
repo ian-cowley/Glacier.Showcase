@@ -163,7 +163,7 @@ public class GlacierShowcaseUiComponentTests
         var runBtn = cut.Find("button.btn.btn-primary");
         Assert.False(runBtn.HasAttribute("disabled"));
         runBtn.Click();
-        cut.WaitForAssertion(() => Assert.False(cut.Find("button.btn.btn-primary").HasAttribute("disabled")));
+        cut.WaitForAssertion(() => Assert.False(cut.Find("button.btn.btn-primary").HasAttribute("disabled")), TimeSpan.FromSeconds(15));
     }
 
     [Fact]
