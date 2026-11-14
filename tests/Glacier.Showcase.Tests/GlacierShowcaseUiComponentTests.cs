@@ -155,13 +155,46 @@ public class GlacierShowcaseUiComponentTests
     }
 
     [Fact]
-    public void GpuShowcasePage_RendersAndHasBenchmarkTriggerButton()
+    public void GpuShowcasePage_RendersAndRunsBenchmarks()
     {
         using var ctx = CreateShowcaseContext();
         var cut = ctx.RenderComponent<GpuShowcase>();
 
         var runBtn = cut.Find("button.btn.btn-primary");
         Assert.False(runBtn.HasAttribute("disabled"));
+        runBtn.Click();
+        cut.WaitForAssertion(() => Assert.False(cut.Find("button.btn.btn-primary").HasAttribute("disabled")));
+    }
+
+    [Fact]
+    public void HomePage_PropertyDetailModal_And_HistoryDropdown_Work()
+    {
+        using var ctx = CreateShowcaseContext();
+        var state = ctx.Services.GetRequiredService<AgentOrchestratorState>();
+        state.FinalMatches.Add(new PropertyMatch
+        {
+            Id = "p-101",
+            Name = "Westminster Loft",
+            Description = "Cozy loft near Westminster",
+            Neighbourhood = "Westminster",
+            Price = 140,
+            ReviewScore = 4.9,
+            ReviewsCount = 42,
+            VibeMatchScore = 0.92f
+        });
+
+        var cut = ctx.RenderComponent<Home>();
+        Assert.NotNull(cut.Find("select.history-dropdown"));
+
+        // Switch to Matches tab (index 2) and click property card to open modal
+        cut.FindAll("button.tab-btn")[2].Click();
+        cut.Find("div.glass-card[style*='cursor: pointer']").Click();
+        Assert.NotNull(cut.Find("div.modal-overlay"));
+
+        Assert.NotNull(cut.Find("div.modal-overlay"));
+        Assert.NotNull(cut.Find("div.modal-content"));
+        cut.Find("button.modal-close-btn").Click();
+        Assert.Empty(cut.FindAll("div.modal-overlay"));
     }
 
     [Fact]
