@@ -11,7 +11,9 @@ builder.Services.AddHttpClient<Glacier.Showcase.Services.GeminiEmbeddingClient>(
     {
         var config = sp.GetRequiredService<IConfiguration>();
         var apiKey = config["GEMINI_API_KEY"] ?? config["GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
-        return new Glacier.Showcase.Services.GeminiEmbeddingClient(httpClient, apiKey);
+        var npuEndpoint = config["GLACIER_NPU_ENDPOINT"] ?? Environment.GetEnvironmentVariable("GLACIER_NPU_ENDPOINT");
+        var npuEmbedModel = config["GLACIER_NPU_EMBED_MODEL"] ?? Environment.GetEnvironmentVariable("GLACIER_NPU_EMBED_MODEL");
+        return new Glacier.Showcase.Services.GeminiEmbeddingClient(httpClient, apiKey, npuEndpoint, npuEmbedModel);
     });
 builder.Services.AddSingleton<Glacier.Showcase.Services.AirbnbDataService>();
 builder.Services.AddSingleton<Glacier.Showcase.Services.NeighborhoodAssessmentService>();

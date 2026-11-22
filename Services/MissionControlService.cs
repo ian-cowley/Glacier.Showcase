@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Glacier.Graph.Storage;
@@ -14,14 +16,23 @@ using Glacier.Inference.Engine;
 using Glacier.Inference.Hardware;
 using Glacier.Inference.Sampling;
 using Glacier.Serve.Inference.PagedAttention;
+using Glacier.Serve.Serialization;
 using Glacier.Vector.Index;
 using Glacier.Vector.Storage;
+using Microsoft.Extensions.DependencyInjection;
 
 public record ModelOption(string Name, string Architecture, string FilePath, bool Available);
 public record TrainingPoint(int Step, float Loss, float LearningRate, double TokensPerSec);
 public record GraphNodeDto(string Id, string Label, string Category, int Degree);
 public record GraphEdgeDto(string Source, string Target, string Relation);
 public record PagedBlockDto(int BlockId, bool IsAllocated, string? SequenceId, int TokensCount);
+
+public sealed class MissionControlTelemetryOptions
+{
+    public HttpClient? HttpClient { get; init; }
+    public string? ServeHealthUrl { get; init; }
+    public IReadOnlyList<(string BaseUrl, NpuSidecarRuntime Runtime)>? NpuCandidates { get; init; }
+}
 
 public sealed class MissionControlService : IDisposable
 {
@@ -31,13 +42,40 @@ public sealed class MissionControlService : IDisposable
     private readonly PagedBlockPool _blockPool;
     private readonly List<BlockTable> _activeTables = [];
     private readonly double[,] _vectorSimilarityMatrix = new double[8, 8];
+    private readonly HttpClient _telemetryHttp;
+    private readonly bool _ownsTelemetryHttp;
+    private readonly string? _serveHealthUrl;
+    private readonly IReadOnlyList<(string BaseUrl, NpuSidecarRuntime Runtime)>? _npuCandidates;
 
     public IReadOnlyList<ModelOption> AvailableModels { get; private set; } = [];
     public IReadOnlyList<DeviceInfo> Devices { get; private set; } = [];
+    public IReadOnlyList<DeviceInfo> NpuDevices => Devices.Where(d => d.IsNpu).ToList();
+    public NpuSidecarEndpoint? NpuSidecar { get; private set; }
+    public HealthCheckResponse? ServeHealth { get; private set; }
     public IReadOnlyList<TrainingPoint> TrainingHistory => _trainingHistory;
 
     public MissionControlService()
+        : this(new MissionControlTelemetryOptions())
     {
+    }
+
+    public MissionControlService(MissionControlTelemetryOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.HttpClient != null)
+        {
+            _telemetryHttp = options.HttpClient;
+            _ownsTelemetryHttp = false;
+        }
+        else
+        {
+            _telemetryHttp = new HttpClient { Timeout = TimeSpan.FromMilliseconds(1000) };
+            _ownsTelemetryHttp = true;
+        }
+
+        _serveHealthUrl = ResolveServeHealthUrl(options.ServeHealthUrl);
+        _npuCandidates = options.NpuCandidates;
+
         // 1. Initialize GraphStore
         _graphStore = new GraphStore(initialNodeCapacity: 1000, initialEdgeCapacity: 5000);
         _graphSearch = new GraphSearch(_graphStore);
@@ -57,6 +95,87 @@ public sealed class MissionControlService : IDisposable
 
         // 6. Compute genuine 8x8 cosine similarity matrix via Glacier.Vector
         BuildVectorSimilarityMatrix();
+    }
+
+    public static string FormatDeviceMemory(DeviceInfo dev)
+    {
+        ArgumentNullException.ThrowIfNull(dev);
+        if (dev.Vendor == GpuVendor.Cpu)
+            return $"{dev.SharedVramGb:F1} GB RAM";
+        if (dev.IsNpu)
+            return $"{dev.SharedVramGb:F1} GB NPU Cap";
+        if (dev.DedicatedVramGb < 1.0 && dev.SharedVramGb > 0)
+            return $"{dev.SharedVramGb:F1} GB Unified";
+        return $"{dev.DedicatedVramGb:F1} GB VRAM";
+    }
+
+    internal void SetDevicesForTesting(IReadOnlyList<DeviceInfo> devices)
+    {
+        Devices = devices ?? Array.Empty<DeviceInfo>();
+    }
+
+    public async Task RefreshAcceleratorTelemetryAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            NpuSidecar = await NpuSidecarDiscovery.ProbeCachedAsync(
+                httpClient: _telemetryHttp,
+                candidates: _npuCandidates,
+                perEndpointTimeout: TimeSpan.FromMilliseconds(350),
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException or JsonException or InvalidOperationException)
+        {
+            NpuSidecar = null;
+        }
+
+        if (string.IsNullOrWhiteSpace(_serveHealthUrl))
+        {
+            ServeHealth = null;
+            return;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(350));
+        try
+        {
+            using var resp = await _telemetryHttp.GetAsync(_serveHealthUrl, timeoutCts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                ServeHealth = null;
+                return;
+            }
+
+            string json = await resp.Content.ReadAsStringAsync(timeoutCts.Token).ConfigureAwait(false);
+            ServeHealth = JsonSerializer.Deserialize(json, ServeJsonContext.Default.HealthCheckResponse);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException or JsonException or InvalidOperationException or UriFormatException)
+        {
+            ServeHealth = null;
+        }
+    }
+
+    private static string? ResolveServeHealthUrl(string? serveHealthUrl)
+    {
+        string? raw = !string.IsNullOrWhiteSpace(serveHealthUrl)
+            ? serveHealthUrl.Trim()
+            : Environment.GetEnvironmentVariable("GLACIER_SERVE_URL")?.Trim();
+
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        string trimmed = raw.TrimEnd('/');
+        return trimmed.EndsWith("/health", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : $"{trimmed}/health";
     }
 
     public void RefreshHardwareAndModels()
@@ -419,6 +538,17 @@ public sealed class MissionControlService : IDisposable
         await _inferLock.WaitAsync(ct);
         try
         {
+            var matchedDevice = Devices.FirstOrDefault(d => d.Id.Equals(device, StringComparison.OrdinalIgnoreCase));
+            bool isNpuDevice = matchedDevice?.IsNpu == true
+                || device.Contains("npu", StringComparison.OrdinalIgnoreCase)
+                || device.Contains("xdna", StringComparison.OrdinalIgnoreCase);
+            if (isNpuDevice)
+            {
+                string npuMessage = $"Device '{device}' is an NPU accelerator. Local GGUF InferenceSession does not execute on NPU hardware; route inference via the NPU HTTP sidecar instead.";
+                onStatus?.Invoke(npuMessage);
+                throw new NotSupportedException(npuMessage);
+            }
+
             var targetModel = AvailableModels.FirstOrDefault(m => m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
 
             if (targetModel == null || !targetModel.Available || !File.Exists(targetModel.FilePath))
@@ -429,9 +559,9 @@ public sealed class MissionControlService : IDisposable
                 throw new FileNotFoundException(message, missingPath);
             }
 
-            var targetEngine = device.Contains("nvidia", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.BareMetal :
-                               device.Contains("amd", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.DirectML :
-                               InferenceEngineType.Cpu;
+            var targetEngine = device.Contains("nvidia", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.BareMetal
+                : device.Contains("amd", StringComparison.OrdinalIgnoreCase) ? InferenceEngineType.DirectML
+                : InferenceEngineType.Cpu;
 
             string sessionKey = $"{targetModel.FilePath}|{device}|{targetEngine}";
 
@@ -483,6 +613,10 @@ public sealed class MissionControlService : IDisposable
 
     public void Dispose()
     {
+        if (_ownsTelemetryHttp)
+        {
+            _telemetryHttp.Dispose();
+        }
         _cachedSession?.Dispose();
         _cachedSession = null;
         _inferLock.Dispose();

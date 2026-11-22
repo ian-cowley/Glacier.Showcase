@@ -33,17 +33,29 @@ public class GlacierShowcaseUiComponentTests
         ctx.JSInterop.Mode = JSRuntimeMode.Loose;
 
         var httpClient = new HttpClient(new StubHandler(), disposeHandler: false);
+        var telemetryHttpClient = new HttpClient(new TelemetryStubHandler(), disposeHandler: false);
         ctx.Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         ctx.Services.AddSingleton(new GeminiEmbeddingClient(httpClient, ""));
         ctx.Services.AddSingleton<AirbnbDataService>();
         ctx.Services.AddSingleton<NeighborhoodAssessmentService>();
         ctx.Services.AddSingleton<PdfReportService>();
         ctx.Services.AddSingleton<GpuAccelerationBenchmarkService>();
-        ctx.Services.AddSingleton<MissionControlService>();
+        ctx.Services.AddSingleton(new MissionControlService(new MissionControlTelemetryOptions
+        {
+            HttpClient = telemetryHttpClient,
+            ServeHealthUrl = "http://127.0.0.1:11435/health",
+            NpuCandidates = [("http://127.0.0.1:52625", Glacier.Inference.Hardware.NpuSidecarRuntime.FastFlowLM)]
+        }));
         ctx.Services.AddScoped<AgentOrchestratorState>();
         ctx.Services.AddScoped<AgentService>();
 
         return ctx;
+    }
+
+    private sealed class TelemetryStubHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 
     [Fact]

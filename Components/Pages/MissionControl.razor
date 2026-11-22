@@ -109,7 +109,7 @@
                             <select @bind="SelectedDeviceName" class="mc-select" disabled="@IsGenerating">
                                 @foreach (var d in MissionControlSvc.Devices)
                                 {
-                                    <option value="@d.Id">@d.Name (@d.DedicatedVramGb:F1 GB VRAM)</option>
+                                    <option value="@d.Id">@d.Name (@MissionControlService.FormatDeviceMemory(d))</option>
                                 }
                             </select>
                         </div>
@@ -167,6 +167,33 @@
                         <div class="telem-item">
                             <span class="telem-lbl">TOTAL TOKENS</span>
                             <span class="telem-val">@GeneratedCount</span>
+                        </div>
+                    </div>
+
+                    <div class="telemetry-bar" style="margin-top: 0.75rem;">
+                        <div class="telem-item">
+                            <span class="telem-lbl">NPU HARDWARE</span>
+                            <span class="telem-val">
+                                @(MissionControlSvc.NpuDevices.Count > 0
+                                    ? MissionControlService.FormatDeviceMemory(MissionControlSvc.NpuDevices[0])
+                                    : "None Detected")
+                            </span>
+                        </div>
+                        <div class="telem-item">
+                            <span class="telem-lbl">NPU SIDECAR</span>
+                            <span class="telem-val">
+                                @(MissionControlSvc.NpuSidecar != null
+                                    ? $"Online: {MissionControlSvc.NpuSidecar.Runtime} · {MissionControlSvc.NpuSidecar.PrimaryModel ?? "ready"}"
+                                    : "Offline / Standby")
+                            </span>
+                        </div>
+                        <div class="telem-item">
+                            <span class="telem-lbl">SERVE TELEMETRY</span>
+                            <span class="telem-val">
+                                @(MissionControlSvc.ServeHealth != null
+                                    ? $"{MissionControlSvc.ServeHealth.Status} ({MissionControlSvc.ServeHealth.Devices?.Count ?? 0} devs)"
+                                    : "Standalone")
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -571,6 +598,11 @@
         {
             SelectedDeviceName = MissionControlSvc.Devices[0].Id;
         }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await MissionControlSvc.RefreshAcceleratorTelemetryAsync();
     }
 
     private void SetTab(string tab)

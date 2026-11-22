@@ -36,9 +36,9 @@ public class AirbnbDataService
     private static string ResolveListingsCsvPath()
     {
         string? envPath = Environment.GetEnvironmentVariable("GLACIER_LISTINGS_CSV");
-        if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
+        if (!string.IsNullOrWhiteSpace(envPath))
         {
-            return envPath;
+            return Path.GetFullPath(envPath.Trim());
         }
 
         string[] candidates =
@@ -150,12 +150,24 @@ public class AirbnbDataService
     /// </summary>
     public async Task<List<PropertyMatch>> SemanticSearchAsync(List<PropertyMatch> candidateProperties, string vibeDescription, int topK = 5)
     {
-        // 1. Initialize Vector Storage (3072 is Gemini embedding size)
-        var storage = new InMemoryVectorStorage(dimensions: 3072);
-        _vectorIndex = new VectorIndex(storage);
+        if (candidateProperties == null || candidateProperties.Count == 0 || string.IsNullOrWhiteSpace(vibeDescription))
+        {
+            return [];
+        }
 
-        // 2. Generate embeddings in parallel with rate limiting
-        using var semaphore = new SemaphoreSlim(5); // Process 5 at a time to be safe with rate limits
+        // 1. Generate embedding for the query "vibe" first to discover dimensionality dynamically
+        // (supports 3072-dim Gemini, 768-dim NPU EmbeddingGemma, or any custom embedding model).
+        var queryEmbedding = await _embeddingClient.GetEmbeddingAsync(vibeDescription);
+        if (queryEmbedding.Length == 0)
+        {
+            return [];
+        }
+
+        int dims = queryEmbedding.Length;
+
+        // 2. Generate candidate embeddings in parallel with rate limiting and dimension-safe caching
+        var embeddedItems = new ConcurrentBag<(float[] Embedding, string Metadata)>();
+        using var semaphore = new SemaphoreSlim(5);
         var tasks = candidateProperties.Select(async prop =>
         {
             await semaphore.WaitAsync();
@@ -164,16 +176,16 @@ public class AirbnbDataService
                 string textToEmbed = $"{prop.Name}. {prop.Description}";
                 if (string.IsNullOrWhiteSpace(textToEmbed)) return;
 
-                if (!_embeddingCache.TryGetValue(textToEmbed, out var embedding))
+                if (!_embeddingCache.TryGetValue(textToEmbed, out var embedding) || embedding.Length != dims)
                 {
                     embedding = await _embeddingClient.GetEmbeddingAsync(textToEmbed);
                     _embeddingCache[textToEmbed] = embedding;
                 }
 
-                var metadata = JsonSerializer.Serialize(prop);
-                lock (storage) // InMemoryVectorStorage Add is not thread-safe
+                if (embedding.Length == dims)
                 {
-                    _vectorIndex.Add(embedding, metadata);
+                    var metadata = JsonSerializer.Serialize(prop);
+                    embeddedItems.Add((embedding, metadata));
                 }
             }
             finally
@@ -184,11 +196,22 @@ public class AirbnbDataService
 
         await Task.WhenAll(tasks);
 
-        // 3. Generate embedding for the query "vibe"
-        var queryEmbedding = await _embeddingClient.GetEmbeddingAsync(vibeDescription);
+        if (embeddedItems.IsEmpty)
+        {
+            return [];
+        }
 
-        // 4. Perform ultra-fast SIMD vector search
-        var results = _vectorIndex.Search(queryEmbedding, topK);
+        // 3. Initialize dynamic-dimension Vector Storage and index all candidate vectors
+        var storage = new InMemoryVectorStorage(dimensions: dims);
+        var vectorIndex = new VectorIndex(storage);
+        foreach (var (embedding, metadata) in embeddedItems)
+        {
+            vectorIndex.Add(embedding, metadata);
+        }
+
+        // 4. Perform ultra-fast SIMD vector search on local index before assigning instance field
+        var results = vectorIndex.Search(queryEmbedding, topK);
+        _vectorIndex = vectorIndex;
 
         // 5. Map back to PropertyMatch objects
         var bestMatches = new List<PropertyMatch>();
