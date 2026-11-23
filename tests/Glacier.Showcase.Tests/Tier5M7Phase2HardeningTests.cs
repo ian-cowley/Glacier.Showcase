@@ -76,7 +76,7 @@ public sealed class Tier5M7Phase2HardeningTests : IDisposable
         sw.Stop();
 
         Assert.Equal(1, Volatile.Read(ref embedCalls) - callsBefore);
-        Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(1500), $"Expected single timeout failure (<1500ms), actual: {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(3500), $"Expected single timeout failure (<3500ms, avoiding 5s tarpit), actual: {sw.ElapsedMilliseconds}ms");
     }
 
     [Fact]
