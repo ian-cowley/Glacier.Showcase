@@ -712,7 +712,10 @@
         try
         {
             string runsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", "runs");
-            string filepath = Path.Combine(runsFolder, filename);
+            if (!TryResolveRunFilePath(runsFolder, filename, out string filepath))
+            {
+                return;
+            }
             if (File.Exists(filepath))
             {
                 var json = File.ReadAllText(filepath);
@@ -933,17 +936,43 @@
         return IsThinking && State.RegisteredAgents.TryGetValue(agentName, out var info) && (info.Status == "Thinking" || info.Status == "Executing Tool");
     }
 
-    private string FormatMessage(string content)
+    internal static bool TryResolveRunFilePath(string runsFolder, string? filename, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(filename) || filename.IndexOf('\0') >= 0)
+            return false;
+
+        if (!string.Equals(Path.GetFileName(filename), filename, StringComparison.Ordinal) ||
+            filename.Contains("..", StringComparison.Ordinal))
+            return false;
+
+        string rootFull = Path.GetFullPath(runsFolder);
+        string rootPrefix = rootFull.EndsWith(Path.DirectorySeparatorChar)
+            ? rootFull
+            : rootFull + Path.DirectorySeparatorChar;
+        string candidate = Path.GetFullPath(Path.Combine(rootFull, filename));
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!candidate.StartsWith(rootPrefix, cmp))
+            return false;
+
+        resolvedPath = candidate;
+        return true;
+    }
+
+    private string FormatMessage(string content) => FormatMessageHtml(content);
+
+    internal static string FormatMessageHtml(string content)
     {
         if (string.IsNullOrWhiteSpace(content)) return "";
 
-        var html = content.Replace("\n", "<br/>");
-        
-        // Detect PDF download links in chat content and render as a styled direct badge/link
-        var regex = new System.Text.RegularExpressions.Regex(@"(https?://[^\s<>""' ]+|/[^\s<>""' ]+\.pdf)");
-        html = regex.Replace(html, match => 
-            $"<a href='{match.Value}' target='_blank' style='color: var(--primary); font-weight: bold; text-decoration: underline;'>{match.Value}</a>");
-            
+        string encoded = System.Net.WebUtility.HtmlEncode(content);
+        var html = encoded.Replace("\n", "<br/>");
+
+        // Detect PDF download links in encoded chat content without consuming escaped tag boundaries
+        var regex = new System.Text.RegularExpressions.Regex(@"(https?://(?:(?!&(?:lt|gt|quot|#39);)[^\s<>""'])+|/(?:(?!&(?:lt|gt|quot|#39);)[^\s<>""'])+\.pdf)");
+        html = regex.Replace(html, match =>
+            $"<a href='{match.Value}' target='_blank' rel='noopener noreferrer' style='color: var(--primary); font-weight: bold; text-decoration: underline;'>{match.Value}</a>");
+
         return html;
     }
 

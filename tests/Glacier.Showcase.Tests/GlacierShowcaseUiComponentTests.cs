@@ -229,4 +229,20 @@ public class GlacierShowcaseUiComponentTests
         var notFound = ctx.RenderComponent<NotFound>();
         Assert.Contains("Not Found", notFound.Markup, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void HomeSecurityHelpers_EncodeHtml_AndBlockRunPathTraversal()
+    {
+        string xss = "Hello <script>alert(1)</script>\nSee https://example.com/report.pdf";
+        string formatted = Home.FormatMessageHtml(xss);
+        Assert.DoesNotContain("<script>", formatted, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("&lt;script&gt;alert(1)&lt;/script&gt;", formatted);
+        Assert.Contains("href='https://example.com/report.pdf'", formatted);
+
+        string runsRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "glacier_runs_sec");
+        Assert.False(Home.TryResolveRunFilePath(runsRoot, "../../appsettings.json", out _));
+        Assert.False(Home.TryResolveRunFilePath(runsRoot, "../secret.json", out _));
+        Assert.True(Home.TryResolveRunFilePath(runsRoot, "run_001.json", out string valid));
+        Assert.EndsWith("run_001.json", valid);
+    }
 }
