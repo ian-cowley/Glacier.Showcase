@@ -44,7 +44,7 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/spuri2000/Glacier.Showcase.git
+git clone https://github.com/ian-cowley/Glacier.Showcase.git
 cd Glacier.Showcase
 dotnet run -c Release
 ```
