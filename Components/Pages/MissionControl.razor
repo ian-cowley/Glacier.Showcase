@@ -3,6 +3,7 @@
 @using System.Threading
 @inject MissionControlService MissionControlSvc
 @rendermode InteractiveServer
+@implements IDisposable
 
 <PageTitle>Glacier Mission Control - Real-Time .NET 10 Visual Cockpit</PageTitle>
 
@@ -18,16 +19,16 @@
         </div>
         <div class="hud-badges">
             <div class="hud-badge cyan">
-                <span class="badge-label">COLD START</span>
-                <span class="badge-val">&lt; 15 ms</span>
+                <span class="badge-label">HARDWARE</span>
+                <span class="badge-val">@(MissionControlSvc.Devices.Count > 0 ? $"{MissionControlSvc.Devices.Count} Detected" : "Host CPU")</span>
             </div>
             <div class="hud-badge green">
                 <span class="badge-label">FINE-TUNING</span>
-                <span class="badge-val">16.0s / Step (32 tok/s)</span>
+                <span class="badge-val">@($"{LatestTrainingTokSec:F1} tok/s ({(MissionControlSvc.IsLiveTelemetry ? "Live" : "Baseline")})")</span>
             </div>
             <div class="hud-badge purple">
                 <span class="badge-label">PAGEDATTENTION</span>
-                <span class="badge-val">87.5% VRAM SAVED</span>
+                <span class="badge-val">@($"{PagedStats.MemoryReductionPct:F1}% VRAM SAVED")</span>
             </div>
             <div class="hud-badge magenta">
                 <span class="badge-label">ARCHITECTURE</span>
@@ -213,16 +214,19 @@
                         <span class="vs-badge">2.63x FASTER</span>
                     </div>
                     <div class="score-side glacier">
-                        <div class="score-hdr">GLACIER.TUNE (In-VRAM + AVX-512)</div>
-                        <div class="score-val">16.0s / Step</div>
-                        <div class="score-sub">32.0 tok/s | 26s saved/step | Loss: 21.8704</div>
+                        <div class="score-hdr">GLACIER.TUNE (@MissionControlSvc.TelemetrySource)</div>
+                        <div class="score-val">@($"{LatestTrainingTokSec:F1} tok/s")</div>
+                        <div class="score-sub">Loss: @FirstTrainingLoss.ToString("F4") → @LatestTrainingLoss.ToString("F4")</div>
                     </div>
                 </div>
 
                 <!-- Loss Graph Visualizer -->
                 <div class="glass-card chart-panel">
                     <div class="panel-header-flex">
-                        <h3 class="panel-heading">Empirical Training Cross-Entropy Loss Curve (Glacier.Tune)</h3>
+                        <div>
+                            <h3 class="panel-heading">Empirical Training Cross-Entropy Loss Curve (Glacier.Tune)</h3>
+                            <p class="panel-sub">Source: @MissionControlSvc.TelemetrySource</p>
+                        </div>
                         <button class="mc-btn-sm" @onclick="ReloadEmpiricalSteps">↻ Reset Empirical Log</button>
                     </div>
 
@@ -600,9 +604,31 @@
         }
     }
 
+    private double LatestTrainingTokSec =>
+        MissionControlSvc.TrainingHistory.Count > 0
+            ? MissionControlSvc.TrainingHistory[^1].TokensPerSec
+            : 0.0;
+
+    private float FirstTrainingLoss =>
+        MissionControlSvc.TrainingHistory.Count > 0
+            ? MissionControlSvc.TrainingHistory[0].Loss
+            : 0.0f;
+
+    private float LatestTrainingLoss =>
+        MissionControlSvc.TrainingHistory.Count > 0
+            ? MissionControlSvc.TrainingHistory[^1].Loss
+            : 0.0f;
+
     protected override async Task OnInitializedAsync()
     {
         await MissionControlSvc.RefreshAcceleratorTelemetryAsync();
+    }
+
+    public void Dispose()
+    {
+        _currentCts?.Cancel();
+        _currentCts?.Dispose();
+        _currentCts = null;
     }
 
     private void SetTab(string tab)

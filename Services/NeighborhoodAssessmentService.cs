@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using Glacier.DocTree.Core;
 using Glacier.Graph.Storage;
@@ -167,9 +168,10 @@ public class NeighborhoodAssessmentService
                 result.Path = new List<string> { normalizedName, "City of London" };
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Fallback direct path
+            Trace.TraceWarning($"NeighborhoodAssessmentService.GetTransitRouteToCentral fallback for '{neighborhood}': {ex.Message}");
             result.Path = new List<string> { neighborhood, "City of London" };
         }
         return result;
@@ -205,9 +207,10 @@ public class NeighborhoodAssessmentService
                 }
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Fall through to default
+            Trace.TraceWarning($"NeighborhoodAssessmentService.GetNeighborhoodProfile fallback for '{normalizedName}': {ex.Message}");
         }
 
         // Return a mock default if not found

@@ -1,10 +1,18 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
 using Glacier.Graphics.Pdf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Glacier.Showcase.Services;
 
 public class PdfReportService
 {
+    private const string ReportSearchPattern = "prospectus_*.pdf";
+
     // ── Brand palette ────────────────────────────────────────────────────────
     private const string ColAccent      = "#0284c7";
     private const string ColAccentDark  = "#075985";
@@ -20,6 +28,36 @@ public class PdfReportService
     private const double MarginL        = 50.0;
     private const double MarginR        = 562.0;
 
+    private readonly string _reportsDirectory;
+    private readonly TimeSpan _retention;
+    private readonly int _maxRetainedReports;
+    private readonly Func<DateTime> _utcNowProvider;
+
+    [ActivatorUtilitiesConstructor]
+    public PdfReportService()
+        : this(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports"))
+    {
+    }
+
+    public PdfReportService(
+        string reportsDirectory,
+        TimeSpan? retention = null,
+        int maxRetainedReports = 50,
+        Func<DateTime>? utcNowProvider = null)
+    {
+        if (string.IsNullOrWhiteSpace(reportsDirectory))
+            throw new ArgumentException("Reports directory must be provided.", nameof(reportsDirectory));
+
+        TimeSpan effectiveRetention = retention ?? TimeSpan.FromHours(24);
+        if (effectiveRetention < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(retention), "Retention cannot be negative.");
+
+        _reportsDirectory = Path.GetFullPath(reportsDirectory);
+        _retention = effectiveRetention;
+        _maxRetainedReports = Math.Max(1, maxRetainedReports);
+        _utcNowProvider = utcNowProvider ?? (() => DateTime.UtcNow);
+    }
+
     public string GenerateInvestmentProspectus(
         List<PropertyMatch> properties,
         string rationale,
@@ -27,6 +65,9 @@ public class PdfReportService
         NeighborhoodProfile? profile = null,
         List<PropertyUnderwriting>? underwriting = null)
     {
+        properties ??= new List<PropertyMatch>();
+        rationale ??= string.Empty;
+
         var builder = TinyPdfCreate.Create();
         int pageNumber = 0;
         string generatedAt = DateTime.Now.ToString("dd MMM yyyy, HH:mm");
@@ -191,16 +232,99 @@ public class PdfReportService
         });
 
         // ── Save ──────────────────────────────────────────────────────────────
-        string reportsDir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports");
-        Directory.CreateDirectory(reportsDir);
+        Directory.CreateDirectory(_reportsDirectory);
 
-        string fileName = $"prospectus_{DateTime.Now.Ticks}.pdf";
-        string filepath = Path.Combine(reportsDir, fileName);
+        string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        string fileName = $"prospectus_{token}.pdf";
+        string filepath = Path.Combine(_reportsDirectory, fileName);
+        string tempPath = Path.Combine(_reportsDirectory, $".{fileName}.{Guid.NewGuid():N}.tmp");
 
         byte[] pdf = builder.Build();
-        File.WriteAllBytes(filepath, pdf);
+        try
+        {
+            File.WriteAllBytes(tempPath, pdf);
+            File.Move(tempPath, filepath, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+            throw;
+        }
+
+        PruneExpiredReports(protectedFilePath: filepath);
 
         return $"/reports/{fileName}";
+    }
+
+    public int PruneExpiredReports(string? protectedFilePath = null)
+    {
+        if (!Directory.Exists(_reportsDirectory))
+            return 0;
+
+        string? protectedFull = string.IsNullOrWhiteSpace(protectedFilePath)
+            ? null
+            : Path.GetFullPath(protectedFilePath);
+
+        int deleted = 0;
+        DateTime cutoffUtc = _utcNowProvider() - _retention;
+        var retained = new List<FileInfo>();
+
+        try
+        {
+            foreach (string path in Directory.EnumerateFiles(_reportsDirectory, ReportSearchPattern, SearchOption.TopDirectoryOnly))
+            {
+                string fullPath = Path.GetFullPath(path);
+                if (protectedFull != null && string.Equals(fullPath, protectedFull, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var info = new FileInfo(fullPath);
+                if (info.LastWriteTimeUtc < cutoffUtc)
+                {
+                    if (TryDeleteReportFile(info))
+                        deleted++;
+                }
+                else
+                {
+                    retained.Add(info);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning($"PdfReportService.PruneExpiredReports scan failed in '{_reportsDirectory}': {ex.Message}");
+            return deleted;
+        }
+
+        int protectedCount = protectedFull != null && File.Exists(protectedFull) ? 1 : 0;
+        int excess = retained.Count + protectedCount - _maxRetainedReports;
+        if (excess > 0)
+        {
+            retained.Sort((a, b) => a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc));
+            for (int i = 0; i < excess && i < retained.Count; i++)
+            {
+                if (TryDeleteReportFile(retained[i]))
+                    deleted++;
+            }
+        }
+
+        return deleted;
+    }
+
+    private static bool TryDeleteReportFile(FileInfo info)
+    {
+        try
+        {
+            info.Delete();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning($"PdfReportService failed to prune '{info.FullName}': {ex.Message}");
+            return false;
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

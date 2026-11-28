@@ -53,6 +53,8 @@ public sealed class MissionControlService : IDisposable
     public NpuSidecarEndpoint? NpuSidecar { get; private set; }
     public HealthCheckResponse? ServeHealth { get; private set; }
     public IReadOnlyList<TrainingPoint> TrainingHistory => _trainingHistory;
+    public bool IsLiveTelemetry { get; private set; }
+    public string TelemetrySource { get; private set; } = "Reference Baseline (RTX 4060)";
 
     public MissionControlService()
         : this(new MissionControlTelemetryOptions())
@@ -227,9 +229,10 @@ public sealed class MissionControlService : IDisposable
                     }
                 }
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Ignore inaccessible subdirectories during discovery
+                Trace.TraceWarning($"MissionControlService model scan skipped '{dir}': {ex.Message}");
             }
         }
 
@@ -269,7 +272,7 @@ public sealed class MissionControlService : IDisposable
         const int dims = 384;
         const int count = 8;
         var storage = new InMemoryVectorStorage(dimensions: dims);
-        var index = new VectorIndex(storage);
+        using var index = new VectorIndex(storage);
 
         float[][] embeddings = new float[count][];
         for (int r = 0; r < count; r++)
@@ -413,6 +416,8 @@ public sealed class MissionControlService : IDisposable
     public void LoadEmpiricalTelemetry(string? logPath = null)
     {
         _trainingHistory.Clear();
+        IsLiveTelemetry = false;
+        TelemetrySource = "Reference Baseline (RTX 4060)";
 
         string path = logPath ?? Path.Combine(AppContext.BaseDirectory, "run_telemetry.jsonl");
         if (File.Exists(path))
@@ -422,21 +427,24 @@ public sealed class MissionControlService : IDisposable
                 foreach (var line in File.ReadLines(path))
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    var node = System.Text.Json.Nodes.JsonNode.Parse(line);
-                    if (node != null)
+                    var entry = JsonSerializer.Deserialize(line, ShowcaseJsonContext.Default.TelemetryLogLine);
+                    if (entry != null)
                     {
-                        int step = node["step"]?.GetValue<int>() ?? 0;
-                        float loss = (float)(node["loss"]?.GetValue<double>() ?? 0.0);
-                        float lr = (float)(node["lr"]?.GetValue<double>() ?? 2e-4);
-                        double tokSec = node["tok_sec"]?.GetValue<double>() ?? 46.0;
-                        _trainingHistory.Add(new TrainingPoint(step, loss, lr, tokSec));
+                        _trainingHistory.Add(new TrainingPoint(entry.Step, entry.Loss, entry.Lr, entry.TokSec ?? 46.0));
                     }
                 }
-                if (_trainingHistory.Count > 0) return;
+                if (_trainingHistory.Count > 0)
+                {
+                    IsLiveTelemetry = true;
+                    TelemetrySource = $"Live Telemetry ({Path.GetFileName(path)})";
+                    return;
+                }
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
             {
                 // Fall back to empirical 10-step physical hardware log
+                Trace.TraceWarning($"MissionControlService.LoadEmpiricalTelemetry fallback from '{path}': {ex.Message}");
+                _trainingHistory.Clear();
             }
         }
 
@@ -474,6 +482,8 @@ public sealed class MissionControlService : IDisposable
     {
         _trainingHistory.Add(pt);
         if (_trainingHistory.Count > 100) _trainingHistory.RemoveAt(0);
+        IsLiveTelemetry = true;
+        TelemetrySource = "Live Training Stream";
     }
 
     private void SeedPagedAttentionPool()

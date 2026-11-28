@@ -238,15 +238,26 @@ public class AgentOrchestratorState
     /// <summary>
     /// Persists the complete orchestration run history to disk as a JSON report outside wwwroot.
     /// </summary>
-    public string PersistRunHistory()
+    public string PersistRunHistory() => PersistRunHistory(GetRunsDirectory());
+
+    /// <summary>
+    /// Persists the complete orchestration run history atomically to the specified directory.
+    /// </summary>
+    public string PersistRunHistory(string targetDirectory)
     {
+        if (string.IsNullOrWhiteSpace(targetDirectory))
+            throw new ArgumentException("Target directory must be provided.", nameof(targetDirectory));
+
+        string? tempPath = null;
         try
         {
-            string folder = GetRunsDirectory();
+            string folder = Path.GetFullPath(targetDirectory);
             Directory.CreateDirectory(folder);
 
-            string filename = $"run_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+            string uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+            string filename = $"run_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{uniqueSuffix}.json";
             string filepath = Path.Combine(folder, filename);
+            tempPath = Path.Combine(folder, $".{filename}.{Guid.NewGuid():N}.tmp");
 
             var runReport = new ShowcaseRunReport
             {
@@ -266,12 +277,18 @@ public class AgentOrchestratorState
             };
 
             string json = JsonSerializer.Serialize(runReport, ShowcaseIndentedJsonContext.Default.ShowcaseRunReport);
-            File.WriteAllText(filepath, json);
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, filepath, overwrite: true);
+            tempPath = null;
 
             return filename;
         }
         catch (Exception ex)
         {
+            if (!string.IsNullOrEmpty(tempPath) && File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
             AddStepLog("System", "Error", $"Failed to persist run history: {ex.Message}");
             return string.Empty;
         }
