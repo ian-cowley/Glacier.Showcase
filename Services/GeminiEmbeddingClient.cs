@@ -60,19 +60,22 @@ public class GeminiEmbeddingClient : IDisposable
             return await GetNpuEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
         }
 
-        var request = new
+        var payload = new GeminiEmbedRequest
         {
-            model = "models/gemini-embedding-001",
-            content = new
+            Model = "models/gemini-embedding-001",
+            Content = new GeminiEmbedContent
             {
-                parts = new[] { new { text = text } }
+                Parts = [new GeminiEmbedPart { Text = text }]
             }
         };
 
-        var response = await _httpClient.PostAsJsonAsync(
-            $"https://generativelanguage.googleapis.com/v1/models/gemini-embedding-001:embedContent?key={_apiKey}",
-            request,
-            cancellationToken).ConfigureAwait(false);
+        using var requestMessage = new HttpRequestMessage(
+            HttpMethod.Post,
+            "https://generativelanguage.googleapis.com/v1/models/gemini-embedding-001:embedContent");
+        requestMessage.Headers.TryAddWithoutValidation("x-goog-api-key", _apiKey);
+        requestMessage.Content = JsonContent.Create(payload, ShowcaseJsonContext.Default.GeminiEmbedRequest);
+
+        using var response = await _httpClient.SendAsync(requestMessage, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -80,10 +83,12 @@ public class GeminiEmbeddingClient : IDisposable
             throw new InvalidOperationException($"Gemini API Error (EmbedContent): {response.StatusCode}\nDetails: {errorBody}");
         }
 
-        var json = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken).ConfigureAwait(false);
-        var values = json.GetProperty("embedding").GetProperty("values").EnumerateArray();
+        var embedResponse = await response.Content
+            .ReadFromJsonAsync(ShowcaseJsonContext.Default.GeminiEmbedResponse, cancellationToken)
+            .ConfigureAwait(false);
+        var result = embedResponse?.Embedding?.Values
+            ?? throw new InvalidOperationException("Gemini API Error (EmbedContent): Missing embedding values in response payload.");
 
-        var result = values.Select(v => v.GetSingle()).ToArray();
         lock (_stateLock)
         {
             _activeBackend = "Gemini";

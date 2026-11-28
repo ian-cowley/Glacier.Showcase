@@ -1,5 +1,5 @@
 using System.IO;
-using TinyPdf;
+using Glacier.Graphics.Pdf;
 
 namespace Glacier.Showcase.Services;
 
@@ -15,7 +15,7 @@ public class PdfReportService
     private const string ColCardText    = "#1E293B";
     private const string ColMuted       = "#64748B";
     private const string ColWhite       = "#FFFFFF";
-    private const double PageW          = 612.0;  // TinyPdf default: Letter
+    private const double PageW          = 612.0;  // Glacier.Graphics.Pdf default: Letter
     private const double PageH          = 792.0;
     private const double MarginL        = 50.0;
     private const double MarginR        = 562.0;
@@ -67,7 +67,7 @@ public class PdfReportService
             pwdY -= 14;
             ctx.Text("Glacier.DocTree   —   disk-serialised tree, lazily deserialized neighbourhood profiles", MarginL, pwdY, 9.0);
             pwdY -= 14;
-            ctx.Text("Glacier.AgentDevKit (ADK)   —   LLM agent orchestration, telemetry, delegation tools", MarginL, pwdY, 9.0);
+            ctx.Text("Glacier.Agent   —   LLM agent orchestration, telemetry, delegation tools", MarginL, pwdY, 9.0);
 
             ctx.Rect(0, PageH - 560, PageW, 2, ColDivider);
 

@@ -44,9 +44,10 @@ public class GpuAccelerationBenchmarkService
                     return $"{a.Description} ({vramMb})";
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // Fallback to CPU environment description
+                Trace.TraceWarning($"GpuAccelerationBenchmarkService.DetectedHardware fallback to CPU: {ex.Message}");
             }
 
             string cpuName = Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER") ?? "Host CPU";
@@ -56,32 +57,39 @@ public class GpuAccelerationBenchmarkService
         }
     }
 
-    public async Task<List<BenchmarkResult>> RunAllBenchmarksAsync()
+    public async Task<List<BenchmarkResult>> RunAllBenchmarksAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return await Task.Run(() =>
         {
             var results = new List<BenchmarkResult>();
 
+            cancellationToken.ThrowIfCancellationRequested();
             // 1. Glacier.Polaris: Vector Math & Sigmoid
             results.Add(BenchmarkPolaris());
 
+            cancellationToken.ThrowIfCancellationRequested();
             // 2. Glacier.ML: K-Means Cluster Assignment
             results.Add(BenchmarkMlCluster());
 
+            cancellationToken.ThrowIfCancellationRequested();
             // 3. Glacier.Tensor: Tensor Core MMA Matrix Multiplication
             results.Add(BenchmarkTensorCoreGemm());
 
+            cancellationToken.ThrowIfCancellationRequested();
             // 4. Glacier.Vector: Batch Vector Scan
             results.Add(BenchmarkVectorBatchScan());
 
+            cancellationToken.ThrowIfCancellationRequested();
             // 5. Glacier.Plot: MinMax Decimation
             results.Add(BenchmarkPlotMinMax());
 
-            // 6. Glacier.StatsViz: Vectorized Gaussian KDE
-            results.Add(BenchmarkStatsVizKde());
+            cancellationToken.ThrowIfCancellationRequested();
+            // 6. Glacier.Plot.Statistical: Vectorized Gaussian KDE
+            results.Add(BenchmarkPlotStatsKde());
 
             return results;
-        });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     private BenchmarkResult BenchmarkPolaris()
@@ -317,7 +325,7 @@ public class GpuAccelerationBenchmarkService
             verified);
     }
 
-    private BenchmarkResult BenchmarkStatsVizKde()
+    private BenchmarkResult BenchmarkPlotStatsKde()
     {
         int numSamples = 20_000;
         int numGrid = 500;
@@ -331,18 +339,18 @@ public class GpuAccelerationBenchmarkService
         float[] gpuDensity = new float[numGrid];
 
         // Warmup
-        Glacier.StatsViz.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, cpuDensity, Glacier.StatsViz.Core.GpuTarget.Cpu);
-        Glacier.StatsViz.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, gpuDensity, Glacier.StatsViz.Core.GpuTarget.Auto);
+        Glacier.Plot.Statistical.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, cpuDensity, Glacier.Plot.Core.GpuTarget.Cpu);
+        Glacier.Plot.Statistical.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, gpuDensity, Glacier.Plot.Core.GpuTarget.Auto);
 
         var sw = Stopwatch.StartNew();
         for (int i = 0; i < 5; i++)
-            Glacier.StatsViz.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, cpuDensity, Glacier.StatsViz.Core.GpuTarget.Cpu);
+            Glacier.Plot.Statistical.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, cpuDensity, Glacier.Plot.Core.GpuTarget.Cpu);
         sw.Stop();
         double cpuMs = sw.Elapsed.TotalMilliseconds / 5.0;
 
         sw.Restart();
         for (int i = 0; i < 5; i++)
-            Glacier.StatsViz.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, gpuDensity, Glacier.StatsViz.Core.GpuTarget.Auto);
+            Glacier.Plot.Statistical.Compute.GpuStatsAccelerator.EvaluateKde(samples, grid, 0.5f, gpuDensity, Glacier.Plot.Core.GpuTarget.Auto);
         sw.Stop();
         double gpuMs = sw.Elapsed.TotalMilliseconds / 5.0;
 
@@ -350,7 +358,7 @@ public class GpuAccelerationBenchmarkService
         double evaluationsPerSec = ((double)numSamples * numGrid) / (gpuMs * 1000.0);
 
         return new BenchmarkResult(
-            "Glacier.StatsViz",
+            "Glacier.Plot.Statistical",
             "Gaussian Kernel Density Estimation",
             "20,000 samples x 500 grid points (10M evals)",
             cpuMs,

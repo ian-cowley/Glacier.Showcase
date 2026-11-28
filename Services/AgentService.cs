@@ -1,13 +1,39 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
-using Glacier.AgentDevKit.Adk;
+using Glacier.Agent.Llm;
+using Glacier.Agent.Serialization;
+using Glacier.Agent.Tools;
+using Glacier.Agent.Workflows;
 
 namespace Glacier.Showcase.Services;
+
+internal static class ToolCancellationScope
+{
+    private static readonly AsyncLocal<CancellationToken> s_current = new();
+
+    public static CancellationToken Current => s_current.Value;
+
+    public static IDisposable Push(CancellationToken cancellationToken)
+    {
+        var previous = s_current.Value;
+        s_current.Value = cancellationToken;
+        return new Scope(previous);
+    }
+
+    private sealed class Scope(CancellationToken previous) : IDisposable
+    {
+        public void Dispose() => s_current.Value = previous;
+    }
+}
 
 public class TelemetryAgent : LlmAgent
 {
@@ -65,10 +91,11 @@ public class TelemetryAgent : LlmAgent
     {
         try
         {
-            return JsonSerializer.Serialize(contents, new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(contents, AdkIndentedJsonContext.Default.ListLlmContent);
         }
-        catch
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
+            Trace.TraceWarning($"TelemetryAgent.SerializeContents failed: {ex.Message}");
             return "[]";
         }
     }
@@ -76,6 +103,16 @@ public class TelemetryAgent : LlmAgent
 
 public class FilterPropertiesTool : ITool
 {
+    private static readonly JsonNode s_schema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""maxPrice"": { ""type"": ""number"", ""description"": ""Maximum price per night."" },
+            ""minReviews"": { ""type"": ""integer"", ""description"": ""Minimum number of reviews required."" },
+            ""neighborhood"": { ""type"": ""string"", ""description"": ""Optional neighborhood to filter by."" }
+        },
+        ""required"": [""maxPrice"", ""minReviews""]
+    }")!;
+
     private readonly AirbnbDataService _dataService;
     private readonly AgentOrchestratorState _state;
     public string Name => "FilterProperties";
@@ -87,33 +124,31 @@ public class FilterPropertiesTool : ITool
         _state = state;
     }
 
-    public JsonNode GetParametersSchema()
-    {
-        return JsonNode.Parse(@"{
-            ""type"": ""object"",
-            ""properties"": {
-                ""maxPrice"": { ""type"": ""number"", ""description"": ""Maximum price per night."" },
-                ""minReviews"": { ""type"": ""integer"", ""description"": ""Minimum number of reviews required."" },
-                ""neighborhood"": { ""type"": ""string"", ""description"": ""Optional neighborhood to filter by."" }
-            },
-            ""required"": [""maxPrice"", ""minReviews""]
-        }")!;
-    }
+    public JsonNode GetParametersSchema() => s_schema;
 
     public async Task<string> ExecuteAsync(string arguments)
     {
+        CancellationToken ct = ToolCancellationScope.Current;
+        ct.ThrowIfCancellationRequested();
+
         try
         {
-            var args = JsonDocument.Parse(arguments).RootElement;
-            double maxPrice = args.GetProperty("maxPrice").GetDouble();
-            int minReviews = args.GetProperty("minReviews").GetInt32();
-            string neighborhood = args.TryGetProperty("neighborhood", out var nProp) ? nProp.GetString() ?? "" : "";
+            var args = JsonSerializer.Deserialize(arguments, ShowcaseJsonContext.Default.FilterPropertiesArgs)
+                ?? new FilterPropertiesArgs();
 
             _state.SetExecutionPhase("Filtering");
-            var matches = await _dataService.FilterPropertiesAsync(maxPrice, minReviews, neighborhood);
+            var matches = await _dataService.FilterPropertiesAsync(
+                args.MaxPrice,
+                args.MinReviews,
+                args.Neighborhood ?? "",
+                cancellationToken: ct).ConfigureAwait(false);
             _state.FilteredProperties = matches;
 
             return $"Successfully filtered properties using Glacier.Polaris. Found {matches.Count} candidate properties.";
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -124,6 +159,15 @@ public class FilterPropertiesTool : ITool
 
 public class SemanticSearchTool : ITool
 {
+    private static readonly JsonNode s_schema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""vibe"": { ""type"": ""string"", ""description"": ""The vibe or description to search for (e.g. 'modern minimal', 'cozy cottage')."" },
+            ""neighborhood"": { ""type"": ""string"", ""description"": ""Optional neighborhood to search within."" }
+        },
+        ""required"": [""vibe""]
+    }")!;
+
     private readonly AirbnbDataService _dataService;
     private readonly AgentOrchestratorState _state;
     public string Name => "SemanticSearch";
@@ -135,41 +179,35 @@ public class SemanticSearchTool : ITool
         _state = state;
     }
 
-    public JsonNode GetParametersSchema()
-    {
-        return JsonNode.Parse(@"{
-            ""type"": ""object"",
-            ""properties"": {
-                ""vibe"": { ""type"": ""string"", ""description"": ""The vibe or description to search for (e.g. 'modern minimal', 'cozy cottage')."" },
-                ""neighborhood"": { ""type"": ""string"", ""description"": ""Optional neighborhood to search within."" }
-            },
-            ""required"": [""vibe""]
-        }")!;
-    }
+    public JsonNode GetParametersSchema() => s_schema;
 
     public async Task<string> ExecuteAsync(string arguments)
     {
+        CancellationToken ct = ToolCancellationScope.Current;
+        ct.ThrowIfCancellationRequested();
+
         try
         {
-            var args = JsonDocument.Parse(arguments).RootElement;
-            string vibe = args.GetProperty("vibe").GetString() ?? "";
-            string neighborhood = args.TryGetProperty("neighborhood", out var nProp) ? nProp.GetString() ?? "" : "";
+            var args = JsonSerializer.Deserialize(arguments, ShowcaseJsonContext.Default.SemanticSearchArgs)
+                ?? new SemanticSearchArgs();
+            string vibe = args.Vibe ?? "";
+            string neighborhood = args.Neighborhood ?? "";
 
             _state.SetExecutionPhase("Vibe Search");
 
             List<PropertyMatch> candidates;
             if (!string.IsNullOrEmpty(neighborhood))
             {
-                candidates = await _dataService.GetPropertiesInNeighborhoodAsync(neighborhood);
+                candidates = await _dataService.GetPropertiesInNeighborhoodAsync(neighborhood, cancellationToken: ct).ConfigureAwait(false);
             }
             else
             {
                 candidates = _state.FilteredProperties.Count > 0
                     ? _state.FilteredProperties
-                    : await _dataService.GetPropertiesInNeighborhoodAsync("Westminster");
+                    : await _dataService.GetPropertiesInNeighborhoodAsync("Westminster", cancellationToken: ct).ConfigureAwait(false);
             }
 
-            var finalMatches = await _dataService.SemanticSearchAsync(candidates, vibe);
+            var finalMatches = await _dataService.SemanticSearchAsync(candidates, vibe, cancellationToken: ct).ConfigureAwait(false);
             _state.FinalMatches = finalMatches;
 
             var summary = $"Vector search complete! Found {finalMatches.Count} matches matching the vibe '{vibe}'.\n";
@@ -177,6 +215,10 @@ public class SemanticSearchTool : ITool
                 summary += $"- {m.Name} in {m.Neighbourhood} (Price: ${m.Price}, Vibe Score: {m.VibeMatchScore:F2})\n";
 
             return summary;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -187,6 +229,14 @@ public class SemanticSearchTool : ITool
 
 public class AuditNeighborhoodTool : ITool
 {
+    private static readonly JsonNode s_schema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""neighborhood"": { ""type"": ""string"", ""description"": ""The name of the neighborhood / borough (e.g. 'Westminster')."" }
+        },
+        ""required"": [""neighborhood""]
+    }")!;
+
     private readonly NeighborhoodAssessmentService _assessmentService;
     private readonly AgentOrchestratorState _state;
     public string Name => "AuditNeighborhood";
@@ -198,23 +248,17 @@ public class AuditNeighborhoodTool : ITool
         _state = state;
     }
 
-    public JsonNode GetParametersSchema()
-    {
-        return JsonNode.Parse(@"{
-            ""type"": ""object"",
-            ""properties"": {
-                ""neighborhood"": { ""type"": ""string"", ""description"": ""The name of the neighborhood / borough (e.g. 'Westminster')."" }
-            },
-            ""required"": [""neighborhood""]
-        }")!;
-    }
+    public JsonNode GetParametersSchema() => s_schema;
 
     public Task<string> ExecuteAsync(string arguments)
     {
+        ToolCancellationScope.Current.ThrowIfCancellationRequested();
+
         try
         {
-            var args = JsonDocument.Parse(arguments).RootElement;
-            string neighborhood = args.GetProperty("neighborhood").GetString() ?? "";
+            var args = JsonSerializer.Deserialize(arguments, ShowcaseJsonContext.Default.AuditNeighborhoodArgs)
+                ?? new AuditNeighborhoodArgs();
+            string neighborhood = args.Neighborhood ?? "";
 
             _state.SetExecutionPhase("Auditing Neighborhood");
             var profile = _assessmentService.GetNeighborhoodProfile(neighborhood);
@@ -223,8 +267,8 @@ public class AuditNeighborhoodTool : ITool
             _state.ActiveNeighborhoodProfile = profile;
             _state.ActiveTransitRoute = route;
 
-            var resultObj = new { Profile = profile, Route = route };
-            return Task.FromResult(JsonSerializer.Serialize(resultObj, new JsonSerializerOptions { WriteIndented = true }));
+            var resultObj = new NeighborhoodAuditResult { Profile = profile, Route = route };
+            return Task.FromResult(JsonSerializer.Serialize(resultObj, ShowcaseIndentedJsonContext.Default.NeighborhoodAuditResult));
         }
         catch (Exception ex)
         {
@@ -235,6 +279,14 @@ public class AuditNeighborhoodTool : ITool
 
 public class GenerateReportTool : ITool
 {
+    private static readonly JsonNode s_schema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""rationale"": { ""type"": ""string"", ""description"": ""The investment rationale to include in the report."" }
+        },
+        ""required"": [""rationale""]
+    }")!;
+
     private readonly PdfReportService _pdfService;
     private readonly AgentOrchestratorState _state;
     public string Name => "GenerateReport";
@@ -246,23 +298,17 @@ public class GenerateReportTool : ITool
         _state = state;
     }
 
-    public JsonNode GetParametersSchema()
-    {
-        return JsonNode.Parse(@"{
-            ""type"": ""object"",
-            ""properties"": {
-                ""rationale"": { ""type"": ""string"", ""description"": ""The investment rationale to include in the report."" }
-            },
-            ""required"": [""rationale""]
-        }")!;
-    }
+    public JsonNode GetParametersSchema() => s_schema;
 
     public Task<string> ExecuteAsync(string arguments)
     {
+        ToolCancellationScope.Current.ThrowIfCancellationRequested();
+
         try
         {
-            var args = JsonDocument.Parse(arguments).RootElement;
-            string rationale = args.GetProperty("rationale").GetString() ?? "";
+            var args = JsonSerializer.Deserialize(arguments, ShowcaseJsonContext.Default.GenerateReportArgs)
+                ?? new GenerateReportArgs();
+            string rationale = args.Rationale ?? "";
 
             if (_state.FinalMatches.Count == 0)
             {
@@ -290,6 +336,11 @@ public class GenerateReportTool : ITool
 
 public class UnderwritePropertiesTool : ITool
 {
+    private static readonly JsonNode s_schema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {}
+    }")!;
+
     private readonly AgentOrchestratorState _state;
     public string Name => "UnderwriteProperties";
     public string Description => "Underwrites property listings by calculating occupancy rates, gross annual revenue, operating expenses, net operating income (NOI), cap rate / rental yield, and cash-on-cash return.";
@@ -299,16 +350,12 @@ public class UnderwritePropertiesTool : ITool
         _state = state;
     }
 
-    public JsonNode GetParametersSchema()
-    {
-        return JsonNode.Parse(@"{
-            ""type"": ""object"",
-            ""properties"": {}
-        }")!;
-    }
+    public JsonNode GetParametersSchema() => s_schema;
 
     public Task<string> ExecuteAsync(string arguments)
     {
+        ToolCancellationScope.Current.ThrowIfCancellationRequested();
+
         try
         {
             _state.SetExecutionPhase("Underwriting Projections");
@@ -375,13 +422,13 @@ public class DelegateTool : ITool
     private readonly string _description;
     private readonly JsonNode _schema;
 
-    public DelegateTool(string name, string description, TelemetryAgent specialistAgent, ILlmService? llmService, string schemaJson)
+    public DelegateTool(string name, string description, TelemetryAgent specialistAgent, ILlmService? llmService, JsonNode schema)
     {
         Name = name;
         _description = description;
         _specialistAgent = specialistAgent;
         _llmService = llmService;
-        _schema = JsonNode.Parse(schemaJson)!;
+        _schema = schema;
     }
 
     public string Name { get; }
@@ -395,16 +442,50 @@ public class DelegateTool : ITool
             throw new InvalidOperationException("GEMINI_API_KEY environment variable is required to invoke specialist agents.");
         }
 
-        // Synthesize an instructional prompt containing the arguments for the specialist
+        CancellationToken ct = ToolCancellationScope.Current;
         var prompt = $"Task Assignment: Execute your specialty task with parameters: {arguments}. Run your tool and return the exact text results.";
-        var result = await _specialistAgent.RunAsync(prompt, _llmService);
-        return result;
+        return await AgentService.RunAgentWithCancellationAsync(_specialistAgent, prompt, _llmService, ct).ConfigureAwait(false);
     }
 }
 
-public class AgentService
+public class AgentService : IDisposable
 {
+    private static readonly JsonNode s_delegatePolarisSchema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""maxPrice"": { ""type"": ""number"", ""description"": ""Maximum price per night."" },
+            ""minReviews"": { ""type"": ""integer"", ""description"": ""Minimum reviews count."" }
+        },
+        ""required"": [""maxPrice"", ""minReviews""]
+    }")!;
+
+    private static readonly JsonNode s_delegateVectorSchema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""vibe"": { ""type"": ""string"", ""description"": ""Descriptive vibe (e.g. cozy luxury, modern minimal)."" }
+        },
+        ""required"": [""vibe""]
+    }")!;
+
+    private static readonly JsonNode s_delegateRiskSchema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""neighborhood"": { ""type"": ""string"", ""description"": ""Borough name to audit (e.g. Westminster)."" }
+        },
+        ""required"": [""neighborhood""]
+    }")!;
+
+    private static readonly JsonNode s_delegateProspectusSchema = JsonNode.Parse(@"{
+        ""type"": ""object"",
+        ""properties"": {
+            ""rationale"": { ""type"": ""string"", ""description"": ""Detailed investment rationale text explaining why these listings match the request."" }
+        },
+        ""required"": [""rationale""]
+    }")!;
+
     private readonly ILlmService? _llmService;
+    private readonly ShowcaseIntentRouter _intentRouter = new();
+    private int _disposed;
 
     // Core Agents
     public TelemetryAgent AcquisitionManager { get; }
@@ -481,53 +562,28 @@ public class AgentService
                 description: "Delegates to the Polaris Analyst to filter property listings by price and reviews. Call this first.",
                 specialistAgent: PolarisAnalyst,
                 llmService: _llmService,
-                schemaJson: @"{
-                    ""type"": ""object"",
-                    ""properties"": {
-                        ""maxPrice"": { ""type"": ""number"", ""description"": ""Maximum price per night."" },
-                        ""minReviews"": { ""type"": ""integer"", ""description"": ""Minimum reviews count."" }
-                    },
-                    ""required"": [""maxPrice"", ""minReviews""]
-                }"
+                schema: s_delegatePolarisSchema
             ),
             new DelegateTool(
                 name: "DelegateToVectorSpecialist",
                 description: "Delegates to the Vector Specialist to search the filtered candidates semantically for a specific vibe. Call this second.",
                 specialistAgent: VectorSpecialist,
                 llmService: _llmService,
-                schemaJson: @"{
-                    ""type"": ""object"",
-                    ""properties"": {
-                        ""vibe"": { ""type"": ""string"", ""description"": ""Descriptive vibe (e.g. cozy luxury, modern minimal)."" }
-                    },
-                    ""required"": [""vibe""]
-                }"
+                schema: s_delegateVectorSchema
             ),
             new DelegateTool(
                 name: "DelegateToRiskAuditor",
                 description: "Delegates to the Risk Auditor to retrieve safety scores and transit paths for a neighborhood. Call this third, using the neighborhood from the top listing.",
                 specialistAgent: RiskAuditor,
                 llmService: _llmService,
-                schemaJson: @"{
-                    ""type"": ""object"",
-                    ""properties"": {
-                        ""neighborhood"": { ""type"": ""string"", ""description"": ""Borough name to audit (e.g. Westminster)."" }
-                    },
-                    ""required"": [""neighborhood""]
-                }"
+                schema: s_delegateRiskSchema
             ),
             new DelegateTool(
                 name: "DelegateToProspectusDesigner",
                 description: "Delegates to the Prospectus Designer to generate a PDF Investment Prospectus with your analysis rationale. Call this last.",
                 specialistAgent: ProspectusDesigner,
                 llmService: _llmService,
-                schemaJson: @"{
-                    ""type"": ""object"",
-                    ""properties"": {
-                        ""rationale"": { ""type"": ""string"", ""description"": ""Detailed investment rationale text explaining why these listings match the request."" }
-                    },
-                    ""required"": [""rationale""]
-                }"
+                schema: s_delegateProspectusSchema
             )
         };
 
@@ -555,8 +611,72 @@ IMPORTANT: Do not skip steps. Do not hallucinate links or data. Always call the 
         );
     }
 
-    public async Task<string> RunAsync(string prompt)
+    internal static string BuildFilterPromptJson(double maxPrice, int minReviews, string? neighborhood)
     {
+        var args = new FilterPropertiesArgs
+        {
+            MaxPrice = maxPrice,
+            MinReviews = minReviews,
+            Neighborhood = neighborhood ?? string.Empty
+        };
+        return JsonSerializer.Serialize(args, ShowcaseJsonContext.Default.FilterPropertiesArgs);
+    }
+
+    internal static string BuildVectorPromptJson(string vibe, string neighborhood)
+    {
+        var args = new SemanticSearchArgs
+        {
+            Vibe = vibe,
+            Neighborhood = neighborhood
+        };
+        return JsonSerializer.Serialize(args, ShowcaseJsonContext.Default.SemanticSearchArgs);
+    }
+
+    internal static string BuildRiskPromptJson(string neighborhood)
+    {
+        var args = new AuditNeighborhoodArgs
+        {
+            Neighborhood = neighborhood
+        };
+        return JsonSerializer.Serialize(args, ShowcaseJsonContext.Default.AuditNeighborhoodArgs);
+    }
+
+    internal static async Task<string> RunAgentWithCancellationAsync(
+        TelemetryAgent agent,
+        string prompt,
+        ILlmService llmService,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var _ = ToolCancellationScope.Push(cancellationToken);
+
+        var sb = new StringBuilder();
+        await foreach (var chunk in agent.RunStreamingAsync(prompt, llmService, sessionId: null, cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            sb.Append(chunk);
+        }
+
+        for (int i = agent.History.Count - 1; i >= 0; i--)
+        {
+            var msg = agent.History[i];
+            if (string.Equals(msg.Role, "model", StringComparison.OrdinalIgnoreCase) && msg.Parts.Count > 0)
+            {
+                string text = string.Concat(msg.Parts.Where(p => !string.IsNullOrEmpty(p.Text)).Select(p => p.Text));
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    return text;
+                }
+            }
+        }
+
+        return sb.Length > 0 ? sb.ToString() : "No response generated.";
+    }
+
+    public async Task<string> RunAsync(string prompt, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+
         State.Reset();
         State.AddChatMessage("Client", prompt);
 
@@ -567,62 +687,27 @@ IMPORTANT: Do not skip steps. Do not hallucinate links or data. Always call the 
                 throw new InvalidOperationException("GEMINI_API_KEY environment variable is required to run the multi-agent investment workflow.");
             }
 
-            // 1. Parameter Extraction
-            var extractionRequest = new LlmRequest
-            {
-                Model = "models/gemini-2.5-flash",
-                SystemInstruction = LlmContent.Model("You are a parameter extractor. Analyze search prompts and return a JSON object with: 'maxPrice' (default 150), 'minReviews' (default 10), 'vibe' (default 'cozy'), and 'neighborhood' (default null or string if specified)."),
-                Contents = new List<LlmContent>
-                {
-                    LlmContent.User($@"Analyze this user query: ""{prompt}""
-Return a JSON object with:
-- ""maxPrice"" (number, default 150)
-- ""minReviews"" (number, default 10)
-- ""vibe"" (string, default 'cozy')
-- ""neighborhood"" (string or null, e.g. 'Islington')
-
-Return ONLY the raw JSON object, no markdown, no other text.")
-                }
-            };
-
-            State.AddStepLog("Acquisition Manager", "Parameter Extraction", "Extracting parameters from prompt using LLM...");
+            // 1. Local Sub-Millisecond Intent Routing & Parameter Extraction (Glacier.Clavier)
+            State.AddStepLog("Acquisition Manager", "Parameter Extraction", "Routing intent & extracting parameters locally via Glacier.Clavier...");
             State.SetActiveAgent("Acquisition Manager");
-            var extractionResponse = await _llmService.GenerateContentAsync(extractionRequest);
-            var jsonText = extractionResponse.Content?.Trim() ?? "{}";
 
-            // Clean up markdown code blocks if the LLM wrapped it in ```json
-            if (jsonText.StartsWith("```"))
-            {
-                var lines = jsonText.Split('\n');
-                jsonText = string.Join("\n", lines.Where(l => !l.Trim().StartsWith("```")));
-            }
+            ShowcaseRoutedIntent routed = _intentRouter.Route(prompt);
+            double maxPrice = routed.Parameters.MaxPrice;
+            int minReviews = routed.Parameters.MinReviews;
+            string vibe = routed.Parameters.Vibe;
+            string? neighborhood = routed.Parameters.Neighborhood;
 
-            double maxPrice = 150;
-            int minReviews = 10;
-            string vibe = "cozy";
-            string? neighborhood = null;
-
-            try
-            {
-                using var parsedDoc = JsonDocument.Parse(jsonText);
-                var root = parsedDoc.RootElement;
-                if (root.TryGetProperty("maxPrice", out var pVal) && pVal.ValueKind == JsonValueKind.Number) maxPrice = pVal.GetDouble();
-                if (root.TryGetProperty("minReviews", out var rVal) && rVal.ValueKind == JsonValueKind.Number) minReviews = rVal.GetInt32();
-                if (root.TryGetProperty("vibe", out var vVal) && vVal.ValueKind == JsonValueKind.String) vibe = vVal.GetString() ?? "cozy";
-                if (root.TryGetProperty("neighborhood", out var nVal) && nVal.ValueKind == JsonValueKind.String) neighborhood = nVal.GetString();
-            }
-            catch (Exception ex)
-            {
-                State.AddStepLog("Acquisition Manager", "Warning", $"Failed to parse parameters JSON: {ex.Message}. Falling back to default parameters.");
-            }
-
-            State.AddStepLog("Acquisition Manager", "Parameters Parsed", $"Extracted criteria: Max Price: ${maxPrice}, Min Reviews: {minReviews}, Vibe: '{vibe}', Neighborhood: '{neighborhood ?? "All"}'");
+            State.AddStepLog(
+                "Acquisition Manager",
+                "Parameters Parsed",
+                $"Routed '{routed.Intent}' (conf {routed.Confidence:P0}, {routed.LatencyMs:F2} ms) — Max Price: ${maxPrice.ToString("F0", CultureInfo.InvariantCulture)}, Min Reviews: {minReviews}, Vibe: '{vibe}', Neighborhood: '{neighborhood ?? "All"}'");
 
             // 2. Phase 1 — Polaris filtration (must complete before Vector can search)
             State.SetExecutionPhase("Filtering");
             State.SetActiveAgents(new[] { "Polaris Analyst" });
-            var polarisPrompt = $"Task Assignment: Execute your specialty task with parameters: {{\"maxPrice\": {maxPrice}, \"minReviews\": {minReviews}, \"neighborhood\": \"{neighborhood ?? ""}\"}}. Run your tool and return the exact text results.";
-            await PolarisAnalyst.RunAsync(polarisPrompt, _llmService);
+            string polarisArgsJson = BuildFilterPromptJson(maxPrice, minReviews, neighborhood);
+            var polarisPrompt = $"Task Assignment: Execute your specialty task with parameters: {polarisArgsJson}. Run your tool and return the exact text results.";
+            await RunAgentWithCancellationAsync(PolarisAnalyst, polarisPrompt, _llmService, cancellationToken).ConfigureAwait(false);
 
             // 3. Phase 2 — Vector Specialist + Risk Auditor run in parallel now that Polaris has populated FilteredProperties
             State.SetExecutionPhase("Parallel Search");
@@ -630,13 +715,15 @@ Return ONLY the raw JSON object, no markdown, no other text.")
                 ?? State.FilteredProperties.FirstOrDefault()?.Neighbourhood
                 ?? "Westminster";
 
-            var vectorPrompt = $"Task Assignment: Execute your specialty task with parameters: {{\"vibe\": \"{vibe}\", \"neighborhood\": \"{targetNeighborhood}\"}}. Run your tool and return the exact text results.";
-            var riskPrompt   = $"Task Assignment: Execute your specialty task with parameters: {{\"neighborhood\": \"{targetNeighborhood}\"}}. Run your tool and return the exact text results.";
+            string vectorArgsJson = BuildVectorPromptJson(vibe, targetNeighborhood);
+            string riskArgsJson = BuildRiskPromptJson(targetNeighborhood);
+            var vectorPrompt = $"Task Assignment: Execute your specialty task with parameters: {vectorArgsJson}. Run your tool and return the exact text results.";
+            var riskPrompt   = $"Task Assignment: Execute your specialty task with parameters: {riskArgsJson}. Run your tool and return the exact text results.";
 
             State.SetActiveAgents(new[] { "Vector Specialist", "Risk Auditor" });
-            var vectorTask = Task.Run(() => VectorSpecialist.RunAsync(vectorPrompt, _llmService));
-            var riskTask   = Task.Run(() => RiskAuditor.RunAsync(riskPrompt, _llmService));
-            await Task.WhenAll(vectorTask, riskTask);
+            var vectorTask = RunAgentWithCancellationAsync(VectorSpecialist, vectorPrompt, _llmService, cancellationToken);
+            var riskTask   = RunAgentWithCancellationAsync(RiskAuditor, riskPrompt, _llmService, cancellationToken);
+            await Task.WhenAll(vectorTask, riskTask).ConfigureAwait(false);
 
             // 4. Collate Results
             State.SetExecutionPhase("Collating Results");
@@ -663,7 +750,7 @@ Return ONLY the raw JSON object, no markdown, no other text.")
             // 5. Financial Underwriting
             State.SetExecutionPhase("Underwriting Projections");
             var underwritePrompt = "Task Assignment: Execute the UnderwriteProperties tool to underwrite the top collated properties. Run your tool and return the exact text results.";
-            await FinancialUnderwriter.RunAsync(underwritePrompt, _llmService);
+            await RunAgentWithCancellationAsync(FinancialUnderwriter, underwritePrompt, _llmService, cancellationToken).ConfigureAwait(false);
 
             var underwritingSummary = State.UnderwrittenProperties.Count > 0
                 ? string.Join("\n", State.UnderwrittenProperties.Select(uw =>
@@ -675,7 +762,7 @@ Return ONLY the raw JSON object, no markdown, no other text.")
 
             var coordinatorPrompt = $@"Your specialist agents have completed their tasks and provided the following data:
 
-1. Data Filtration (Polaris Analyst): Found {State.FilteredProperties.Count} properties under ${maxPrice} with at least {minReviews} reviews.
+1. Data Filtration (Polaris Analyst): Found {State.FilteredProperties.Count} properties under ${maxPrice.ToString("F0", CultureInfo.InvariantCulture)} with at least {minReviews} reviews.
 2. Vibe Match (Vector Specialist): Top matched properties for vibe '{vibe}':
 {string.Join("\n", State.FinalMatches.Take(3).Select(m => $"- {m.Name} in {m.Neighbourhood} (Price: ${m.Price}, Vibe Score: {m.VibeMatchScore:F2})"))}
 3. Location Audit (Risk Auditor): Audited '{targetNeighborhood}'. Safety: {State.ActiveNeighborhoodProfile?.SafetyScore}, Crime: {State.ActiveNeighborhoodProfile?.CrimeRate}, Vibe: {State.ActiveNeighborhoodProfile?.Vibe}. Transit: {string.Join(" -> ", State.ActiveTransitRoute?.Path ?? new List<string>())} ({State.ActiveTransitRoute?.Hops} hops to Central London).
@@ -685,16 +772,23 @@ Return ONLY the raw JSON object, no markdown, no other text.")
 Your task as Acquisition Manager:
 1. Write a compelling, professional investment rationale that synthesises the property details, neighbourhood quality, transit connectivity, and the financial metrics (cap rate, cash-on-cash).
 2. Call DelegateToProspectusDesigner with that rationale to generate the PDF.
-3. Return the prospectus download link and a high-level summary to the user.";
+3. Return the prospectus download link and a high-level summary of the results to the user.";
 
-            var result = await AcquisitionManager.RunAsync(coordinatorPrompt, _llmService);
+            var result = await RunAgentWithCancellationAsync(AcquisitionManager, coordinatorPrompt, _llmService, cancellationToken).ConfigureAwait(false);
             State.SetExecutionPhase("Finished");
 
-            // Persist run details to disk
+            // Persist run details to disk (private App_Data/runs directory, never wwwroot)
             var logPath = State.PersistRunHistory();
             State.AddStepLog("System", "Finished", $"Run persisted successfully to {logPath}");
 
             return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            State.SetExecutionPhase("Cancelled");
+            State.AddChatMessage("Acquisition Manager", "Orchestration cancelled.", "Error");
+            State.AddStepLog("System", "Cancelled", "Execution cancelled by caller.");
+            throw;
         }
         catch (Exception ex)
         {
@@ -703,5 +797,14 @@ Your task as Acquisition Manager:
             State.AddStepLog("System", "Error", $"Execution halted: {ex.Message}");
             return $"Orchestration failed: {ex.Message}";
         }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        _intentRouter.Dispose();
+        (_llmService as IDisposable)?.Dispose();
     }
 }

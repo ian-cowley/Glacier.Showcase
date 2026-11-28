@@ -2,7 +2,9 @@
 @using Glacier.Showcase.Services
 @using System.IO
 @using System.Text.Json
-@using Glacier.AgentDevKit.Adk
+@using Glacier.Agent.Llm
+@using Glacier.Agent.Tools
+@using Glacier.Agent.Workflows
 @inject AgentService AgentService
 @inject AgentOrchestratorState State
 @inject IJSRuntime JS
@@ -45,7 +47,7 @@
                     <a href="https://www.nuget.org/packages/Glacier.Polaris" target="_blank" class="brand-chip polaris">Glacier.Polaris</a>
                     <a href="https://www.nuget.org/packages/Glacier.Vector" target="_blank" class="brand-chip vector">Glacier.Vector</a>
                     <a href="https://www.nuget.org/packages/Glacier.Plot" target="_blank" class="brand-chip plot">Glacier.Plot</a>
-                    <a href="https://www.nuget.org/packages/Glacier.StatsViz" target="_blank" class="brand-chip statsviz">Glacier.StatsViz</a>
+                    <a href="https://www.nuget.org/packages/Glacier.Agent" target="_blank" class="brand-chip statsviz">Glacier.Agent</a>
                     <a href="https://www.nuget.org/packages/Glacier.Graph" target="_blank" class="brand-chip graph">Glacier.Graph</a>
                 </div>
             </div>
@@ -239,7 +241,7 @@
                         <g class="svg-node @(IsNodeActive("Prospectus Designer") ? "active-node" : "")" transform="translate(680, 450)" @onclick='() => InspectAgent("Prospectus Designer")'>
                             <rect x="-85" y="-30" width="170" height="62" rx="8" fill="@GetNodeFill("Prospectus Designer")" stroke="@GetNodeStroke("Prospectus Designer")" stroke-width="2" filter="@(IsNodeActive("Prospectus Designer") ? "url(#glow)" : "url(#shadow)")" />
                             <text text-anchor="middle" y="-5" fill="white" font-size="11" font-weight="bold">Prospectus Designer</text>
-                            <text text-anchor="middle" y="10" fill="#94a3b8" font-size="9">TinyPdf Writer</text>
+                            <text text-anchor="middle" y="10" fill="#94a3b8" font-size="9">Glacier.Graphics PDF</text>
                             <text text-anchor="middle" y="22" fill="@GetStatusColor("Prospectus Designer")" font-size="8" font-weight="bold">@GetNodeStatusText("Prospectus Designer")</text>
                         </g>
                     </svg>
@@ -557,6 +559,7 @@
 
     // Historical Logs Lists
     private List<string> RunFiles { get; set; } = new();
+    private CancellationTokenSource? _runCts;
 
     protected override void OnInitialized()
     {
@@ -649,10 +652,19 @@
         // Force UI update
         StateHasChanged();
 
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _runCts = new CancellationTokenSource();
+        var ct = _runCts.Token;
+
         try
         {
             // Execute multi-agent orchestration
-            await AgentService.RunAsync(userMsg);
+            await AgentService.RunAsync(userMsg, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            State.AddChatMessage("System", "Run cancelled.", "Error");
         }
         catch (Exception ex)
         {
@@ -663,10 +675,13 @@
             IsThinking = false;
             LoadHistoricalRuns(); // Refresh runs list
             StateHasChanged();
-            
-            await Task.Delay(50); // Let UI render
-            await JS.InvokeVoidAsync("eval", "const el = document.getElementById('chatTextarea'); if(el) el.style.height = 'auto';");
-            await JS.InvokeVoidAsync("eval", "const el = document.getElementById('chatHistory'); if(el) el.scrollTop = el.scrollHeight;");
+
+            if (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(50, ct); // Let UI render
+                await JS.InvokeVoidAsync("eval", "const el = document.getElementById('chatTextarea'); if(el) el.style.height = 'auto';");
+                await JS.InvokeVoidAsync("eval", "const el = document.getElementById('chatHistory'); if(el) el.scrollTop = el.scrollHeight;");
+            }
         }
     }
 
@@ -687,7 +702,7 @@
     {
         try
         {
-            string runsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", "runs");
+            string runsFolder = AgentOrchestratorState.GetRunsDirectory();
             if (Directory.Exists(runsFolder))
             {
                 RunFiles = Directory.GetFiles(runsFolder, "run_*.json")
@@ -696,7 +711,10 @@
                                     .ToList()!;
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Trace.TraceWarning($"Home.LoadHistoricalRuns failed: {ex.Message}");
+        }
     }
 
     private void OnRunSelected(ChangeEventArgs e)
@@ -711,7 +729,7 @@
 
         try
         {
-            string runsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "reports", "runs");
+            string runsFolder = AgentOrchestratorState.GetRunsDirectory();
             if (!TryResolveRunFilePath(runsFolder, filename, out string filepath))
             {
                 return;
@@ -719,118 +737,71 @@
             if (File.Exists(filepath))
             {
                 var json = File.ReadAllText(filepath);
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
+                var report = JsonSerializer.Deserialize(json, ShowcaseJsonContext.Default.ShowcaseRunReport);
+                if (report == null)
+                {
+                    return;
+                }
 
                 State.Reset();
 
                 // 1. ExecutionPhase
-                if (root.TryGetProperty("ExecutionPhase", out var phaseProp))
-                {
-                    State.SetExecutionPhase(phaseProp.GetString() ?? "Finished");
-                }
-                else if (root.TryGetProperty("CurrentPhase", out var legacyPhaseProp))
-                {
-                    State.SetExecutionPhase(legacyPhaseProp.GetString() ?? "Finished");
-                }
-                else
-                {
-                    State.SetExecutionPhase("Finished");
-                }
+                string phase = !string.IsNullOrWhiteSpace(report.ExecutionPhase)
+                    ? report.ExecutionPhase
+                    : (!string.IsNullOrWhiteSpace(report.CurrentPhase) ? report.CurrentPhase : "Finished");
+                State.SetExecutionPhase(phase);
 
                 // 2. ChatHistory -> ChatMessages
-                if (root.TryGetProperty("ChatHistory", out var chatHistProp))
+                foreach (var c in report.ChatHistory)
                 {
-                    foreach (var c in chatHistProp.EnumerateArray())
-                    {
-                        State.AddChatMessage(
-                            c.GetProperty("Sender").GetString() ?? "",
-                            c.GetProperty("Content").GetString() ?? "",
-                            c.GetProperty("Vibe").GetString() ?? "Normal"
-                        );
-                    }
+                    State.AddChatMessage(c.Sender, c.Content, c.Vibe);
                 }
 
                 // 3. FilteredProperties
-                if (root.TryGetProperty("FilteredProperties", out var filtProp))
-                {
-                    State.FilteredProperties = JsonSerializer.Deserialize<List<PropertyMatch>>(filtProp.GetRawText()) ?? new();
-                }
+                State.FilteredProperties = report.FilteredProperties ?? new();
 
                 // 4. FinalMatches
-                if (root.TryGetProperty("FinalMatches", out var finProp))
-                {
-                    State.FinalMatches = JsonSerializer.Deserialize<List<PropertyMatch>>(finProp.GetRawText()) ?? new();
-                }
+                State.FinalMatches = report.FinalMatches ?? new();
 
                 // 5. ActiveNeighborhoodProfile
-                if (root.TryGetProperty("ActiveNeighborhoodProfile", out var profileProp))
-                {
-                    State.ActiveNeighborhoodProfile = JsonSerializer.Deserialize<NeighborhoodProfile>(profileProp.GetRawText());
-                }
+                State.ActiveNeighborhoodProfile = report.ActiveNeighborhoodProfile;
 
                 // 6. ActiveTransitRoute
-                if (root.TryGetProperty("ActiveTransitRoute", out var routeProp))
-                {
-                    State.ActiveTransitRoute = JsonSerializer.Deserialize<TransitRoute>(routeProp.GetRawText());
-                }
+                State.ActiveTransitRoute = report.ActiveTransitRoute;
 
                 // 6b. UnderwrittenProperties
-                if (root.TryGetProperty("UnderwrittenProperties", out var uwProp))
-                {
-                    State.UnderwrittenProperties = JsonSerializer.Deserialize<List<PropertyUnderwriting>>(uwProp.GetRawText()) ?? new();
-                }
+                State.UnderwrittenProperties = report.UnderwrittenProperties ?? new();
 
                 // 7. ProspectusPdfPath
-                if (root.TryGetProperty("ProspectusPdfPath", out var pdfProp))
-                {
-                    State.ProspectusPdfPath = pdfProp.GetString();
-                }
-                else if (root.TryGetProperty("PdfPath", out var legacyPdfProp))
-                {
-                    State.ProspectusPdfPath = legacyPdfProp.GetString();
-                }
+                State.ProspectusPdfPath = !string.IsNullOrWhiteSpace(report.ProspectusPdfPath)
+                    ? report.ProspectusPdfPath
+                    : report.PdfPath;
 
                 // 8. ExecutionLogs -> StepLogs
-                if (root.TryGetProperty("ExecutionLogs", out var logsProp))
+                foreach (var l in report.ExecutionLogs)
                 {
-                    foreach (var l in logsProp.EnumerateArray())
-                    {
-                        State.AddStepLog(
-                            l.GetProperty("AgentName").GetString() ?? "",
-                            l.GetProperty("Action").GetString() ?? "",
-                            l.GetProperty("Description").GetString() ?? "",
-                            l.GetProperty("RawContent").GetString() ?? ""
-                        );
-                    }
+                    State.AddStepLog(l.AgentName, l.Action, l.Description, l.RawContent);
                 }
 
                 // 9. Reconstruct Profile and Route from Risk Auditor's Tool Return in execution logs if missing (for legacy logs support)
-                if ((State.ActiveNeighborhoodProfile == null || State.ActiveTransitRoute == null) && root.TryGetProperty("ExecutionLogs", out var logsForRecon))
+                if (State.ActiveNeighborhoodProfile == null || State.ActiveTransitRoute == null)
                 {
-                    foreach (var l in logsForRecon.EnumerateArray())
+                    foreach (var l in report.ExecutionLogs)
                     {
-                        var agentName = l.GetProperty("AgentName").GetString();
-                        var action = l.GetProperty("Action").GetString();
-                        if (agentName == "Risk Auditor" && action == "Tool Return")
+                        if (l.AgentName == "Risk Auditor" && l.Action == "Tool Return" && !string.IsNullOrEmpty(l.RawContent))
                         {
-                            var rawContent = l.GetProperty("RawContent").GetString();
-                            if (!string.IsNullOrEmpty(rawContent))
+                            try
                             {
-                                try
+                                var audit = JsonSerializer.Deserialize(l.RawContent, ShowcaseJsonContext.Default.NeighborhoodAuditResult);
+                                if (audit != null)
                                 {
-                                    using var innerDoc = JsonDocument.Parse(rawContent);
-                                    var innerRoot = innerDoc.RootElement;
-                                    if (State.ActiveNeighborhoodProfile == null && innerRoot.TryGetProperty("Profile", out var pProp))
-                                    {
-                                        State.ActiveNeighborhoodProfile = JsonSerializer.Deserialize<NeighborhoodProfile>(pProp.GetRawText());
-                                    }
-                                    if (State.ActiveTransitRoute == null && innerRoot.TryGetProperty("Route", out var rProp))
-                                    {
-                                        State.ActiveTransitRoute = JsonSerializer.Deserialize<TransitRoute>(rProp.GetRawText());
-                                    }
+                                    State.ActiveNeighborhoodProfile ??= audit.Profile;
+                                    State.ActiveTransitRoute ??= audit.Route;
                                 }
-                                catch {}
+                            }
+                            catch (JsonException ex)
+                            {
+                                System.Diagnostics.Trace.TraceWarning($"Legacy Risk Auditor log parse failed: {ex.Message}");
                             }
                             break;
                         }
@@ -979,5 +950,8 @@
     public void Dispose()
     {
         State.OnChange -= OnStateChanged;
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _runCts = null;
     }
 }

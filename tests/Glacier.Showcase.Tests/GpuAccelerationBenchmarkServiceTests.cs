@@ -42,7 +42,7 @@ public class GpuAccelerationBenchmarkServiceTests
             "Glacier.Tensor",
             "Glacier.Vector",
             "Glacier.Plot",
-            "Glacier.StatsViz"
+            "Glacier.Plot.Statistical"
         ];
 
         for (int i = 0; i < expectedPillars.Length; i++)

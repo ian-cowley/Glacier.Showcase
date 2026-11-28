@@ -106,7 +106,7 @@ public class AgentOrchestratorState
         {
             Name = "Prospectus Designer",
             Role = "Report Publisher",
-            Instructions = "Gathers property particulars and transit risk assessments, formats high-fidelity investment summaries, and generates print-ready PDFs using TinyPdf.",
+            Instructions = "Gathers property particulars and transit risk assessments, formats high-fidelity investment summaries, and generates print-ready PDFs using Glacier.Graphics.Pdf.",
             Tools = new List<string> { "GenerateReport" }
         });
 
@@ -232,22 +232,25 @@ public class AgentOrchestratorState
         NotifyStateChanged();
     }
 
+    public static string GetRunsDirectory() =>
+        Path.Combine(Directory.GetCurrentDirectory(), "App_Data", "runs");
+
     /// <summary>
-    /// Persists the complete orchestration run history to disk as a JSON report.
+    /// Persists the complete orchestration run history to disk as a JSON report outside wwwroot.
     /// </summary>
     public string PersistRunHistory()
     {
         try
         {
-            string folder = Path.Combine(AppContext.BaseDirectory, "wwwroot", "reports", "runs");
+            string folder = GetRunsDirectory();
             Directory.CreateDirectory(folder);
 
-            string filename = $"run_{DateTime.Now:yyyyMMdd_HHmmss}.json";
+            string filename = $"run_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
             string filepath = Path.Combine(folder, filename);
 
-            var runReport = new
+            var runReport = new ShowcaseRunReport
             {
-                Timestamp = DateTime.Now,
+                Timestamp = DateTime.UtcNow,
                 ExecutionPhase = ExecutionPhase,
                 FinalMatchesCount = FinalMatches.Count,
                 ProspectusPdfPath = ProspectusPdfPath,
@@ -262,10 +265,10 @@ public class AgentOrchestratorState
                 AgentTelemetry = AgentHistories
             };
 
-            string json = JsonSerializer.Serialize(runReport, new JsonSerializerOptions { WriteIndented = true });
+            string json = JsonSerializer.Serialize(runReport, ShowcaseIndentedJsonContext.Default.ShowcaseRunReport);
             File.WriteAllText(filepath, json);
 
-            return $"/reports/runs/{filename}";
+            return filename;
         }
         catch (Exception ex)
         {
